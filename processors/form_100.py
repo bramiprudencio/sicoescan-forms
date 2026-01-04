@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 import re
-from shared.utils import clean_text, parse_float, parse_int, parse_date, parse_bool
-from shared.firestore import insert_entidad, insert_convocatoria, insert_item
+from shared.utils import clean_text, parse_float
+from shared.database import insert_entidad, insert_convocatoria, insert_item
 
 def process_100(html_content, file_name, db):
     print(f"--- Procesando Formulario 100: {file_name} ---")
@@ -12,16 +12,15 @@ def process_100(html_content, file_name, db):
         print(f"Error parseando HTML en {file_name}: {e}")
         return
 
-    # Variables temporales para almacenar datos antes de insertar
+    # Variables
     entidad_data = {}
     convocatoria_data = {}
     items_data = []
 
     # ==========================================
-    # 1. ENTIDAD
+    # 1. ENTIDAD (Extracción y Consulta)
     # ==========================================
     try:
-        # Tu lógica original para buscar la tabla de entidad
         section_title = soup.find("td", string="1. IDENTIFICACIÓN DE LA ENTIDAD")
         if section_title:
             entidad_fila = section_title.find_parent("table").find_all("tr")[-1].find_all("td")
@@ -31,10 +30,25 @@ def process_100(html_content, file_name, db):
                 "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
                 "fax": clean_text(entidad_fila[2].get_text(strip=True)),
                 "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
+                "departamento": None # Inicializamos en None
             }
 
-            # GUARDAR ENTIDAD
+            # --- NUEVA LÓGICA: CONSULTAR DEPARTAMENTO EN FIRESTORE ---
             if entidad_data.get("cod"):
+                # 1. Referencia al documento de la entidad
+                entidad_ref = db.collection("entidades").document(entidad_data["cod"])
+                
+                # 2. Obtenemos el documento (Snapshot)
+                entidad_snapshot = entidad_ref.get()
+
+                if entidad_snapshot.exists:
+                    existing_data = entidad_snapshot.to_dict()
+                    # 3. Extraemos el departamento si existe
+                    entidad_data["departamento"] = existing_data.get("departamento")
+                    # print(f"Departamento recuperado: {entidad_data['departamento']}")
+                
+                # 4. Actualizamos/Creamos la entidad con los datos nuevos del form (fax, tel)
+                # Nota: Esto NO borrará el departamento gracias a la lógica en database.py
                 insert_entidad(
                     db, 
                     entidad_data["cod"], 
@@ -42,11 +56,12 @@ def process_100(html_content, file_name, db):
                     entidad_data["fax"], 
                     entidad_data["telefono"]
                 )
+
     except Exception as e:
-        print(f"Error extrayendo entidad en {file_name}: {e}")
+        print(f"Error procesando entidad en {file_name}: {e}")
 
     # ==========================================
-    # 2. CONVOCATORIA (Datos Generales)
+    # 2. CONVOCATORIA
     # ==========================================
     try:
         convocatoria_cuce = soup.find('td', class_='FormularioCUCE')
@@ -54,7 +69,7 @@ def process_100(html_content, file_name, db):
             convocatoria_data['cuce'] = clean_text(convocatoria_cuce.get_text())
         else:
             print(f"Advertencia: No se encontró CUCE en {file_name}")
-            return # Sin CUCE no podemos guardar nada más
+            return 
 
         mapping = {
             'Fecha de publicación (en el SICOES)': 'fecha_publicacion',
@@ -94,12 +109,10 @@ def process_100(html_content, file_name, db):
         if cronograma_title_td:
             cronograma_table = cronograma_title_td.parent.find_next_sibling('tr').find('table')
             
-            # Helper interno para buscar fechas en la tabla procesada
             def get_date_val(pattern):
                 cell = cronograma_table.find('td', string=re.compile(pattern))
                 return clean_text(cell.find_next_sibling('td').get_text()) if cell else None
 
-            # Limpieza de la tabla (tu lógica original)
             first_row = cronograma_table.find('tr').find_all('td')
             cronograma_cols = []
             for i in range(len(first_row)):
@@ -124,12 +137,9 @@ def process_100(html_content, file_name, db):
         
         if items_table:
             items_table = items_table.find_parent("tr").find_parent("table")
-            
-            # Extraer Total General (usando parse_float)
             total_raw = items_table.find_all("td")[-1].get_text()
             convocatoria_data['total'] = parse_float(total_raw)
 
-            # Limpieza tabla items
             items_cols_size = len(soup.find("td", string=re.compile(r'Código del? Catálogo')).find_parent("tr").find_all('td'))
             [table.decompose() for table in items_table.find_all('table')]
             [row.decompose() for row in items_table.find_all("tr") if len(row.find_all('td')) != items_cols_size]
@@ -137,7 +147,6 @@ def process_100(html_content, file_name, db):
             rows = items_table.find_all("tr")
             if len(rows) > 0:
                 headers = [h.get_text(strip=True) for h in rows[0].find_all("td")]
-                
                 map_headers = {
                     "Código del Catálogo": "cod_catalogo",
                     "Código de Catálogo": "cod_catalogo",
@@ -154,36 +163,30 @@ def process_100(html_content, file_name, db):
                     if not cols or len(cols) < 2: continue
                     
                     item = {}
-                    # Manejo especial descripción (tu lógica original del <b>)
                     b_tag = row.find("b")
-                    if b_tag:
-                         # Opcional: Extraer info del b_tag si es necesaria, luego borrar
-                        b_tag.decompose()
+                    if b_tag: b_tag.decompose()
 
                     for i in range(len(cols)):
                         if i < len(headers):
                             key = headers[i]
                             val = cols[i].get_text().strip()
-                            
-                            # Convertir números
                             if key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
                                 item[key] = parse_float(val)
                             else:
                                 item[key] = clean_text(val)
-                    
                     items_data.append(item)
 
         # ==========================================
-        # 5. GUARDADO FINAL EN BASE DE DATOS
+        # 5. GUARDADO (PASANDO EL DEPARTAMENTO)
         # ==========================================
         
-        # Guardar Convocatoria
         insert_convocatoria(
             db,
             cuce=convocatoria_data.get('cuce'),
             cod_entidad=entidad_data.get('cod'),
             entidad_nombre=entidad_data.get('nombre'),
-            entidad_departamento=entidad_data.get('departamento'),
+            # AQUI pasamos el departamento obtenido de Firestore
+            entidad_departamento=entidad_data.get('departamento'), 
             fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
             objeto=convocatoria_data.get('objeto'),
             modalidad=convocatoria_data.get('modalidad'),
@@ -203,11 +206,10 @@ def process_100(html_content, file_name, db):
             fecha_adjudicacion=convocatoria_data.get('fecha_adjudicacion'),
             fecha_formalizacion=convocatoria_data.get('fecha_formalizacion'),
             fecha_entrega=convocatoria_data.get('fecha_entrega'),
-            estado="Publicado", # O el estado que prefieras
-            forms="FORM100" # Para agregar al array de forms
+            estado="Publicado", 
+            forms="FORM100" 
         )
 
-        # Guardar Items
         for it in items_data:
             insert_item(
                 db,
@@ -220,6 +222,7 @@ def process_100(html_content, file_name, db):
                 precio_referencial_total=it.get('precio_referencial_total'),
                 entidad_cod=entidad_data.get('cod'),
                 entidad_nombre=entidad_data.get('nombre'),
+                # AQUI TAMBIEN
                 entidad_departamento=entidad_data.get('departamento')
             )
 

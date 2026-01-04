@@ -1,10 +1,16 @@
 from bs4 import BeautifulSoup
 import re
-from shared.utils import clean_text, parse_float
-from shared.firestore import insert_entidad, insert_convocatoria, insert_item
+from shared.utils import clean_text, parse_float, slugify
+from shared.database import (
+    check_and_update_convocatoria_170,
+    get_items_by_cuce,
+    update_item_adjudicacion,
+    update_item_desierto,
+    insert_proponente
+)
 
 def process_170(html_content, file_name, db):
-    print(f"--- Procesando Formulario 100: {file_name} ---")
+    print(f"--- Procesando Formulario 170: {file_name} ---")
     
     try:
         soup = BeautifulSoup(html_content, 'html.parser')
@@ -12,218 +18,168 @@ def process_170(html_content, file_name, db):
         print(f"Error parseando HTML en {file_name}: {e}")
         return
 
-    # Variables temporales para almacenar datos antes de insertar
-    entidad_data = {}
-    convocatoria_data = {}
-    items_data = []
+    convocatoria_cuce = None
+    items_adjudicados_map = {} # Clave: slug(descripcion), Valor: data
+    items_desiertos_map = {}   # Clave: slug(descripcion), Valor: data
 
     # ==========================================
-    # 1. ENTIDAD
-    # ==========================================
-    try:
-        # Tu lógica original para buscar la tabla de entidad
-        section_title = soup.find("td", string="1. IDENTIFICACIÓN DE LA ENTIDAD")
-        if section_title:
-            entidad_fila = section_title.find_parent("table").find_all("tr")[-1].find_all("td")
-            
-            entidad_data = {
-                "cod": clean_text(entidad_fila[0].get_text(strip=True)),
-                "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
-                "fax": clean_text(entidad_fila[2].get_text(strip=True)),
-                "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
-            }
-
-            # GUARDAR ENTIDAD
-            if entidad_data.get("cod"):
-                insert_entidad(
-                    db, 
-                    entidad_data["cod"], 
-                    entidad_data["nombre"], 
-                    entidad_data["fax"], 
-                    entidad_data["telefono"]
-                )
-    except Exception as e:
-        print(f"Error extrayendo entidad en {file_name}: {e}")
-
-    # ==========================================
-    # 2. CONVOCATORIA (Datos Generales)
+    # 1. EXTRACCIÓN
     # ==========================================
     try:
-        convocatoria_cuce = soup.find('td', class_='FormularioCUCE')
-        if convocatoria_cuce:
-            convocatoria_data['cuce'] = clean_text(convocatoria_cuce.get_text())
-        else:
-            print(f"Advertencia: No se encontró CUCE en {file_name}")
-            return # Sin CUCE no podemos guardar nada más
+        # CUCE (Tu lógica: segundo strong con esa clase)
+        cuce_tags = soup.find_all('strong', class_='FormularioEtiquetaCUCE')
+        if len(cuce_tags) > 1:
+            convocatoria_cuce = clean_text(cuce_tags[1].get_text())
+        
+        if not convocatoria_cuce:
+            print(f"❌ No se encontró CUCE en {file_name}")
+            return
 
-        mapping = {
-            'Fecha de publicación (en el SICOES)': 'fecha_publicacion',
-            'Objeto de la Contratación': 'objeto',
-            'Subasta': 'subasta',
-            'Concesión Administrativa': 'concesion',
-            'Tipo de convocatoria': 'tipo_convocatoria',
-            'Forma de adjudicación': 'forma_adjudicacion',
-            'Normativa utilizada': 'normativa',
-            'Tipo de contratación': 'tipo_contratacion',
-            'Método de selección y adjudicación': 'metodo_seleccion',
-            'Garantías solicitadas': 'garantias',
-            'Moneda considerada para el proceso': 'moneda',
-            'Elaboración del DBC': 'elaboracion_dbc',
-            'Bienes o servicios recurrentes con cargo a la siguiente gestión:': 'recurrente_sgte_gestion',
-        }
-
-        for label_text, key in mapping.items():
-            label_td = soup.find('td', class_=re.compile(r'FormularioEtiqueta'), string=re.compile(re.escape(label_text), re.IGNORECASE))
-            if label_td:
-                value_td = label_td.find_next_sibling('td', class_=re.compile(r'FormularioDato'))
-                if value_td:
-                    convocatoria_data[key] = clean_text(value_td.get_text())
-
-        # Modalidad
+        # Limpieza previa (Tu lógica de eliminar 'Margenes' en proponentes)
         try:
-            modalidad_td = soup.find("td", string="Modalidad")
-            if modalidad_td:
-                convocatoria_data['modalidad'] = clean_text(modalidad_td.find_parent("tr").find_next_sibling("tr").find_all("td")[0].get_text(strip=True))
-        except:
+            nro_doc_td = soup.find('td', string=re.compile(r"\bNro. Documento\b", re.IGNORECASE))
+            if nro_doc_td:
+                prop_rows = nro_doc_td.find_parent("table").find_all("tr")
+                if len(prop_rows) > 1:
+                    margenes = prop_rows[1].find("td", string=re.compile(r"\bMargenes\b", re.IGNORECASE))
+                    if margenes: margenes.decompose()
+        except: pass
+
+        # ------------------------------------------------
+        # A. ITEMS ADJUDICADOS
+        # ------------------------------------------------
+        adj_title = soup.find("td", string=re.compile(r"\bDETALLE\b.*\bADJUDICADOS\b", re.IGNORECASE))
+        if adj_title:
+            rows = adj_title.find_parent("table").find_all("tr")
+            
+            # Detectar cabecera compleja (con "Preferencia")
+            start_idx = 2
+            pref_td = rows[1].find("td", string=re.compile(r"\bPreferencia\b", re.IGNORECASE))
+            if pref_td:
+                pref_td.decompose()
+                # Fusionar headers de dos filas
+                h1 = [h.get_text(strip=True) for h in rows[1].find_all("td")]
+                h2 = [h.get_text(strip=True) for h in rows[2].find_all("td")]
+                headers_raw = h1 + h2
+                start_idx = 3
+            else:
+                headers_raw = [h.get_text(strip=True) for h in rows[1].find_all("td")]
+
+            # Mapeo
+            map_headers = {
+                "Código Catalogo": "cod_catalogo",
+                "Descripción": "descripcion",
+                "Unidad de Medida": "medida",
+                "Cantidad adjudicada": "cantidad_adjudicada",
+                "Precio referencial unitario": "precio_referencial",
+                "Precio referencial total": "precio_referencial_total",
+                "Precio unitario adjudicado": "precio_adjudicado",
+                "Total adjudicado": "precio_adjudicado_total",
+                "Proponente Adjudicado": "proponente_nombre",
+                "Tipo de Proponente (MyPE, OECA, APP)": "tipo_proponente",
+                "Causal de declaratoria desierta": "causal_desierto"
+            }
+            headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
+
+            for row in rows[start_idx:]:
+                b = row.find("b")
+                if b: b.decompose()
+                cols = row.find_all("td")
+                if not cols or len(cols) < 2: continue
+
+                item = {}
+                for i in range(len(cols)):
+                    if i < len(headers):
+                        item[headers[i]] = clean_text(cols[i].get_text(strip=True))
+                
+                # Guardamos en mapa usando slug de descripcion como clave
+                if 'descripcion' in item:
+                    key_slug = slugify(item['descripcion'])
+                    items_adjudicados_map[key_slug] = item
+
+        # ------------------------------------------------
+        # B. ITEMS DESIERTOS
+        # ------------------------------------------------
+        des_title = soup.find("td", string=re.compile(r"\bDETALLE\b.*\bDESIERTOS\b", re.IGNORECASE))
+        if des_title:
+            rows = des_title.find_parent("table").find_all("tr")
+            # Asumimos estructura simple para desiertos
+            headers_raw = [h.get_text(strip=True) for h in rows[1].find_all("td")]
+            headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers_raw]
+
+            for row in rows[2:]:
+                b = row.find("b")
+                if b: b.decompose()
+                cols = row.find_all("td")
+                if not cols or len(cols) < 2: continue
+
+                item = {}
+                for i in range(len(cols)):
+                    if i < len(headers):
+                        item[headers[i]] = clean_text(cols[i].get_text(strip=True))
+                
+                if 'descripcion' in item:
+                    key_slug = slugify(item['descripcion'])
+                    items_desiertos_map[key_slug] = item
+
+    except Exception as e:
+        print(f"Error extrayendo datos en {file_name}: {e}")
+        return
+
+    # ==========================================
+    # 2. ACTUALIZACIÓN EN BASE DE DATOS
+    # ==========================================
+    
+    # 1. Actualizar Convocatoria (Lógica de estado Recibido/Publicado -> Adjudicado)
+    check_and_update_convocatoria_170(db, convocatoria_cuce)
+
+    # 2. Obtener items existentes
+    existing_docs = list(get_items_by_cuce(db, convocatoria_cuce))
+    
+    # 3. Emparejar y Actualizar
+    for doc in existing_docs:
+        doc_id = doc.id
+        
+        # Intentamos encontrar coincidencia en los mapas usando el ID del documento
+        # (El ID del documento es "CUCE_slug-descripcion", así que verificamos si contiene el slug)
+        
+        match_adjudicado = None
+        match_desierto = None
+
+        # Buscamos en adjudicados
+        for slug_key, data in items_adjudicados_map.items():
+            if slug_key in doc_id:
+                match_adjudicado = data
+                break
+        
+        # Buscamos en desiertos (si no fue adjudicado)
+        if not match_adjudicado:
+            for slug_key, data in items_desiertos_map.items():
+                if slug_key in doc_id:
+                    match_desierto = data
+                    break
+        
+        # --- APLICAR ACTUALIZACIONES ---
+        if match_adjudicado:
+            update_data = {
+                'proponente_nombre': match_adjudicado.get('proponente_nombre'),
+                'precio_adjudicado': parse_float(match_adjudicado.get('precio_adjudicado')),
+                'precio_adjudicado_total': parse_float(match_adjudicado.get('precio_adjudicado_total')),
+                'cantidad_adjudicada': parse_float(match_adjudicado.get('cantidad_adjudicada')), # Usamos float por seguridad
+                'estado': 'Adjudicado'
+            }
+            update_item_adjudicacion(db, doc_id, update_data)
+            
+            # Guardar proponente
+            if match_adjudicado.get('proponente_nombre'):
+                insert_proponente(db, match_adjudicado.get('proponente_nombre'))
+
+        elif match_desierto:
+            update_item_desierto(db, doc_id, match_desierto.get('causal_desierto'))
+        
+        else:
+            # Caso raro: El item existe en la convocatoria original pero no aparece ni en adjudicados ni en desiertos del 170.
+            # Podríamos ignorarlo o marcarlo como pendiente.
             pass
 
-        # ==========================================
-        # 3. CRONOGRAMA
-        # ==========================================
-        cronograma_title_td = soup.find('td', class_='FormularioSubtitulo', string=re.compile(r'CRONOGRAMA DE (PROCESO|ACTIVIDADES)', re.IGNORECASE))
-        if cronograma_title_td:
-            cronograma_table = cronograma_title_td.parent.find_next_sibling('tr').find('table')
-            
-            # Helper interno para buscar fechas en la tabla procesada
-            def get_date_val(pattern):
-                cell = cronograma_table.find('td', string=re.compile(pattern))
-                return clean_text(cell.find_next_sibling('td').get_text()) if cell else None
-
-            # Limpieza de la tabla (tu lógica original)
-            first_row = cronograma_table.find('tr').find_all('td')
-            cronograma_cols = []
-            for i in range(len(first_row)):
-                txt = first_row[i].get_text()
-                if 'Actividad' in txt or 'Fecha' in txt:
-                    cronograma_cols.append(i)
-            
-            for row in cronograma_table.find_all('tr'):
-                for i, cell in enumerate(row.find_all('td')):
-                    if i not in cronograma_cols:
-                        cell.decompose()
-            
-            convocatoria_data['fecha_presentacion'] = get_date_val(r'Presentación')
-            convocatoria_data['fecha_adjudicacion'] = get_date_val(r'Adjudicación')
-            convocatoria_data['fecha_formalizacion'] = get_date_val(r'Formalización')
-            convocatoria_data['fecha_entrega'] = get_date_val(r'Entrega')
-
-        # ==========================================
-        # 4. ITEMS Y TOTALES
-        # ==========================================
-        items_table = soup.find("td", string=re.compile(r'Código del? Catálogo'))
-        
-        if items_table:
-            items_table = items_table.find_parent("tr").find_parent("table")
-            
-            # Extraer Total General (usando parse_float)
-            total_raw = items_table.find_all("td")[-1].get_text()
-            convocatoria_data['total'] = parse_float(total_raw)
-
-            # Limpieza tabla items
-            items_cols_size = len(soup.find("td", string=re.compile(r'Código del? Catálogo')).find_parent("tr").find_all('td'))
-            [table.decompose() for table in items_table.find_all('table')]
-            [row.decompose() for row in items_table.find_all("tr") if len(row.find_all('td')) != items_cols_size]
-            
-            rows = items_table.find_all("tr")
-            if len(rows) > 0:
-                headers = [h.get_text(strip=True) for h in rows[0].find_all("td")]
-                
-                map_headers = {
-                    "Código del Catálogo": "cod_catalogo",
-                    "Código de Catálogo": "cod_catalogo",
-                    "Descripción del bien o servicio": "descripcion",
-                    "Unidad de Medida": "medida",
-                    "Cantidad": "cantidad_solicitada",
-                    "Precio referencial unitario": "precio_referencial",
-                    "Precio referencial total": "precio_referencial_total"
-                }
-                headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
-
-                for row in rows[1:]:
-                    cols = row.find_all("td")
-                    if not cols or len(cols) < 2: continue
-                    
-                    item = {}
-                    # Manejo especial descripción (tu lógica original del <b>)
-                    b_tag = row.find("b")
-                    if b_tag:
-                         # Opcional: Extraer info del b_tag si es necesaria, luego borrar
-                        b_tag.decompose()
-
-                    for i in range(len(cols)):
-                        if i < len(headers):
-                            key = headers[i]
-                            val = cols[i].get_text().strip()
-                            
-                            # Convertir números
-                            if key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
-                                item[key] = parse_float(val)
-                            else:
-                                item[key] = clean_text(val)
-                    
-                    items_data.append(item)
-
-        # ==========================================
-        # 5. GUARDADO FINAL EN BASE DE DATOS
-        # ==========================================
-        
-        # Guardar Convocatoria
-        insert_convocatoria(
-            db,
-            cuce=convocatoria_data.get('cuce'),
-            cod_entidad=entidad_data.get('cod'),
-            entidad_nombre=entidad_data.get('nombre'),
-            entidad_departamento=entidad_data.get('departamento'),
-            fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
-            objeto=convocatoria_data.get('objeto'),
-            modalidad=convocatoria_data.get('modalidad'),
-            subasta=convocatoria_data.get('subasta'),
-            concesion=convocatoria_data.get('concesion'),
-            tipo_convocatoria=convocatoria_data.get('tipo_convocatoria'),
-            forma_adjudicacion=convocatoria_data.get('forma_adjudicacion'),
-            normativa=convocatoria_data.get('normativa'),
-            tipo_contratacion=convocatoria_data.get('tipo_contratacion'),
-            metodo_seleccion=convocatoria_data.get('metodo_seleccion'),
-            garantias=convocatoria_data.get('garantias'),
-            moneda=convocatoria_data.get('moneda'),
-            elaboracion_dbc=convocatoria_data.get('elaboracion_dbc'),
-            recurrente_sgte_gestion=convocatoria_data.get('recurrente_sgte_gestion'),
-            total=convocatoria_data.get('total'),
-            fecha_presentacion=convocatoria_data.get('fecha_presentacion'),
-            fecha_adjudicacion=convocatoria_data.get('fecha_adjudicacion'),
-            fecha_formalizacion=convocatoria_data.get('fecha_formalizacion'),
-            fecha_entrega=convocatoria_data.get('fecha_entrega'),
-            estado="Publicado", # O el estado que prefieras
-            forms="FORM100" # Para agregar al array de forms
-        )
-
-        # Guardar Items
-        for it in items_data:
-            insert_item(
-                db,
-                cuce=convocatoria_data.get('cuce'),
-                cod_catalogo=it.get('cod_catalogo'),
-                descripcion=it.get('descripcion'),
-                medida=it.get('medida'),
-                cantidad_solicitada=it.get('cantidad_solicitada'),
-                precio_referencial=it.get('precio_referencial'),
-                precio_referencial_total=it.get('precio_referencial_total'),
-                entidad_cod=entidad_data.get('cod'),
-                entidad_nombre=entidad_data.get('nombre'),
-                entidad_departamento=entidad_data.get('departamento')
-            )
-
-        print(f"✅ Formulario 100 procesado: {convocatoria_data.get('cuce')}")
-
-    except Exception as e:
-        print(f"❌ Error fatal procesando {file_name}: {e}")
+    print(f"✅ Formulario 170 procesado: {convocatoria_cuce}")

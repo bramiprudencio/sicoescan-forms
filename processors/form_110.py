@@ -18,12 +18,11 @@ def process_110(html_content, file_name, db):
     items_data = []
 
     # ==========================================
-    # 1. ENTIDAD
+    # 1. ENTIDAD (Extracción + Consulta Firestore)
     # ==========================================
     try:
         section_title = soup.find("td", string="1. IDENTIFICACIÓN DE LA ENTIDAD")
         if section_title:
-            # Tu lógica: tabla padre -> última fila -> celdas
             entidad_fila = section_title.find_parent("table").find_all("tr")[-1].find_all("td")
             
             entidad_data = {
@@ -31,10 +30,19 @@ def process_110(html_content, file_name, db):
                 "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
                 "fax": clean_text(entidad_fila[2].get_text(strip=True)),
                 "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
+                "departamento": None # Inicializamos
             }
 
-            # Insertar Entidad inmediatamente (es seguro hacerlo aquí)
+            # --- CONSULTA DE DEPARTAMENTO ---
             if entidad_data.get("cod"):
+                # Buscamos si la entidad ya existe para traer su departamento
+                entidad_ref = db.collection("entidades").document(entidad_data["cod"])
+                entidad_snap = entidad_ref.get()
+                
+                if entidad_snap.exists:
+                    entidad_data["departamento"] = entidad_snap.get("departamento")
+
+                # Guardamos/Actualizamos la entidad (Upsert)
                 insert_entidad(
                     db, 
                     entidad_data["cod"], 
@@ -56,7 +64,6 @@ def process_110(html_content, file_name, db):
             print(f"Advertencia: No se encontró CUCE en {file_name}")
             return
 
-        # Mapeo general
         mapping = {
             'Fecha de publicación (en el SICOES)': 'fecha_publicacion',
             'Objeto de la Contratación': 'objeto',
@@ -80,7 +87,7 @@ def process_110(html_content, file_name, db):
                 if value_td:
                     convocatoria_data[key] = clean_text(value_td.get_text())
 
-        # Modalidad (Lógica específica)
+        # Modalidad
         try:
             modalidad_td = soup.find("td", string="Modalidad")
             if modalidad_td:
@@ -90,7 +97,7 @@ def process_110(html_content, file_name, db):
         except:
             pass
         
-        # Cronograma (Lógica específica del 110)
+        # Cronograma (Específico Form 110)
         cronograma_title_td = soup.find('td', class_='FormularioSubtitulo', string=re.compile(r'CRONOGRAMA DE (PROCESO|ACTIVIDADES)', re.IGNORECASE))
         if cronograma_title_td:
             cronograma_table = cronograma_title_td.parent.find_next_sibling('tr').find('table')
@@ -106,16 +113,15 @@ def process_110(html_content, file_name, db):
         # ==========================================
         # 3. ITEMS Y TOTAL
         # ==========================================
-        # Buscamos la tabla que contiene "Código del Catálogo"
         items_section = soup.find("td", string="Código del Catálogo")
         
         if items_section:
             items_table = items_section.find_parent("tr").find_parent("table")
             
-            # Limpiar tablas anidadas (decompose)
+            # Limpiar tablas anidadas
             [item.decompose() for item in items_table.find_all('table')]
             
-            # Obtener TOTAL GENERAL (última celda de la tabla)
+            # Total General
             try:
                 total_raw = items_table.find_all("td")[-1].get_text()
                 convocatoria_data['total'] = parse_float(total_raw)
@@ -124,7 +130,7 @@ def process_110(html_content, file_name, db):
 
             rows = items_table.find_all("tr")
             
-            # Tu lógica: Cabecera en índice 1 (rows[1])
+            # Cabecera en índice 1 (Tu lógica)
             if len(rows) > 1:
                 headers = [h.get_text(strip=True) for h in rows[1].find_all("td")]
                 
@@ -135,37 +141,30 @@ def process_110(html_content, file_name, db):
                     "Cantidad": "cantidad_solicitada",
                     "Precio referencial unitario": "precio_referencial",
                     "Precio referencial total": "precio_referencial_total",
-                    # Mapeo específico del 110
                     "Precio Unitario del Proveedor Preseleccionado": "precio_referencial",
                     "Precio Total del Proveedor Preseleccionado": "precio_referencial_total"
                 }
                 headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
 
-                # Tu lógica: Iterar desde fila 2 hasta la penúltima (rows[2:-1])
-                # Nota: rows[2:-1] ignora la última fila (que suele ser el total)
+                # Iterar desde fila 2 hasta la penúltima (rows[2:-1]) (Tu lógica)
                 for row in rows[2:-1]:
-                    # Usamos recursive=False para no agarrar celdas de tablas anidadas si quedó alguna
                     cols = row.find_all("td", recursive=False)
                     
-                    # Tu validación: Si no hay cols, o < 2, o la primera columna no es un número
+                    # Validar fila válida (comienza con número)
                     if not cols or len(cols) < 2 or not re.fullmatch(r"[0-9]+", cols[0].get_text(strip=True)):
                         continue
                     
                     item = {}
                     
-                    # Manejo de la descripción en negrita <b> (si existe)
+                    # Limpiar tags <b> de descripción
                     b = row.find("b")
-                    if b:
-                        # Extraemos texto del b si es necesario, y lo borramos del DOM para no duplicar
-                        # catalogo_descripcion = b.get_text() # (Si quisieras usarlo)
-                        b.decompose()
+                    if b: b.decompose()
 
                     for i in range(len(cols)):
                         if i < len(headers):
                             key = headers[i]
                             val = cols[i].get_text().strip()
                             
-                            # Convertimos a float los campos numéricos
                             if key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
                                 item[key] = parse_float(val)
                             else:
@@ -176,14 +175,13 @@ def process_110(html_content, file_name, db):
         # ==========================================
         # 4. GUARDADO FINAL
         # ==========================================
-
-        # Guardar Convocatoria
+        
         insert_convocatoria(
             db,
             cuce=convocatoria_data.get('cuce'),
             cod_entidad=entidad_data.get('cod'),
             entidad_nombre=entidad_data.get('nombre'),
-            entidad_departamento=entidad_data.get('departamento'),
+            entidad_departamento=entidad_data.get('departamento'), # <--- AQUÍ PASAMOS EL DEPTO
             fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
             objeto=convocatoria_data.get('objeto'),
             modalidad=convocatoria_data.get('modalidad'),
@@ -200,14 +198,12 @@ def process_110(html_content, file_name, db):
             recurrente_sgte_gestion=convocatoria_data.get('recurrente_sgte_gestion'),
             total=convocatoria_data.get('total'),
             fecha_presentacion=convocatoria_data.get('fecha_presentacion'),
-            fecha_adjudicacion=convocatoria_data.get('fecha_adjudicacion'),
             fecha_formalizacion=convocatoria_data.get('fecha_formalizacion'),
             fecha_entrega=convocatoria_data.get('fecha_entrega'),
-            estado="Publicado", # O el estado que prefieras
-            forms="FORM100" # Para agregar al array de forms
+            estado="Publicado",
+            forms="FORM110"
         )
 
-        # Guardar Items
         for it in items_data:
             insert_item(
                 db,
@@ -220,7 +216,7 @@ def process_110(html_content, file_name, db):
                 precio_referencial_total=it.get('precio_referencial_total'),
                 entidad_cod=entidad_data.get('cod'),
                 entidad_nombre=entidad_data.get('nombre'),
-                entidad_departamento=entidad_data.get('departamento')
+                entidad_departamento=entidad_data.get('departamento') # <--- AQUÍ TAMBIÉN
             )
 
         print(f"✅ Formulario 110 procesado: {convocatoria_data.get('cuce')}")

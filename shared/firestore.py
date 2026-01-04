@@ -29,9 +29,7 @@ def insert_entidad(db, cod, nombre, fax=None, telefono=None,
 
 # ✅ Insertar o Actualizar una convocatoria
 def insert_convocatoria(
-    db, cuce, cod_entidad,
-    entidad_nombre=None, entidad_departamento=None,
-    fecha_publicacion=None, objeto=None,
+    db, cuce, cod_entidad, fecha_publicacion, objeto,
     modalidad=None, subasta=None, concesion=None,
     tipo_convocatoria=None, forma_adjudicacion=None,
     normativa=None, tipo_contratacion=None,
@@ -40,16 +38,19 @@ def insert_convocatoria(
     recurrente_sgte_gestion=None, total=None,
     fecha_presentacion=None, fecha_adjudicacion=None,
     fecha_formalizacion=None, fecha_entrega=None,
-    estado=None, forms=None
+    estado=None, forms=None, 
+    # NUEVOS ARGUMENTOS
+    entidad_nombre=None, entidad_departamento=None 
 ):
     convocatoria_ref = db.collection("convocatorias").document(cuce)
     
     data = {
         "cod_entidad": cod_entidad,
-        "entidad_nombre": entidad_nombre,
-        "entidad_departamento": entidad_departamento,
+        "entidad_nombre": entidad_nombre,           # Guardamos nombre
+        "entidad_departamento": entidad_departamento, # Guardamos departamento
         "fecha_publicacion": fecha_publicacion,
         "objeto": objeto,
+        # ... (resto de campos igual) ...
         "modalidad": modalidad,
         "subasta": subasta,
         "concesion": concesion,
@@ -70,29 +71,23 @@ def insert_convocatoria(
         "estado": estado
     }
 
-    # 1. Filtramos keys con valores None
     data = {k: v for k, v in data.items() if v is not None}
 
-    # 2. Manejo especial para 'forms' (ArrayUnion)
-    # Si quieres AGREGAR un formulario a la lista existente sin borrar los anteriores:
     if forms:
         if isinstance(forms, list):
-            # Agrega solo valores únicos al array existente en Firestore
             data["forms"] = firestore.ArrayUnion(forms)
         else:
             data["forms"] = firestore.ArrayUnion([forms])
 
-    # 3. Guardar con merge=True
     convocatoria_ref.set(data, merge=True)
 
-# ✅ Insertar o Actualizar un item
 def insert_item(db, cuce, cod_catalogo, descripcion, medida=None,
                 cantidad_solicitada=None, precio_referencial=None,
                 precio_referencial_total=None, fecha_publicacion=None,
-                estado=None, entidad_cod=None, entidad_nombre=None,
-                entidad_departamento=None):
+                estado=None, entidad_nombre=None, 
+                # NUEVOS ARGUMENTOS
+                entidad_cod=None, entidad_departamento=None):
     
-    # ID Compuesto único
     doc_id = f"{cuce}_{slugify(descripcion)}"
     items_ref = db.collection("items").document(doc_id)
     
@@ -106,13 +101,85 @@ def insert_item(db, cuce, cod_catalogo, descripcion, medida=None,
         "precio_referencial_total": precio_referencial_total,
         "fecha_publicacion": fecha_publicacion,
         "estado": estado,
+        # Guardamos datos desnormalizados para facilitar búsquedas
         "entidad_cod": entidad_cod,
         "entidad_nombre": entidad_nombre,
-        "entidad_departamento": entidad_departamento
+        "entidad_departamento": entidad_departamento 
     }
 
-    # Filtramos None
     data = {k: v for k, v in data.items() if v is not None}
-
-    # Upsert
     items_ref.set(data, merge=True)
+
+# ✅ NUEVO: Actualizar estado de convocatoria (Form 500)
+def update_convocatoria_status(db, cuce, nuevo_estado, form_tag):
+    ref = db.collection("convocatorias").document(cuce)
+    
+    # Usamos update porque el documento DEBE existir
+    try:
+        ref.update({
+            "estado": nuevo_estado,
+            "forms": firestore.ArrayUnion([form_tag])
+        })
+    except Exception as e:
+        print(f"⚠️ No se pudo actualizar convocatoria {cuce} (quizás no existe): {e}")
+
+# ✅ NUEVO: Traer items existentes para compararlos
+def get_items_by_cuce(db, cuce):
+    items_ref = db.collection("items")
+    # Traemos todos los items de ese CUCE
+    query = items_ref.where(filter=firestore.FieldFilter("cuce", "==", cuce))
+    return query.stream()
+
+# ✅ NUEVO: Actualizar un item específico con datos de adjudicación
+def update_item_adjudicacion(db, doc_id, data):
+    ref = db.collection("items").document(doc_id)
+    # Filtramos None para limpieza
+    data = {k: v for k, v in data.items() if v is not None}
+    
+    try:
+        ref.update(data)
+    except Exception as e:
+        print(f"⚠️ Error actualizando item {doc_id}: {e}")
+
+# ✅ Reutilizamos tu insert_proponente (asegúrate de que esté en este archivo)
+def insert_proponente(db, nombre):
+    if not nombre: return
+    doc_id = slugify(nombre)
+    ref = db.collection("proponentes").document(doc_id)
+    if not ref.get().exists:
+        ref.set({ 
+            "nombre": nombre
+        })
+
+# ... (imports y funciones anteriores) ...
+
+# ✅ NUEVO: Lógica especial de actualización de estado para Form 170
+def check_and_update_convocatoria_170(db, cuce):
+    ref = db.collection("convocatorias").document(cuce)
+    doc = ref.get()
+    
+    if doc.exists:
+        data = doc.to_dict()
+        current_status = data.get('estado')
+        
+        # Solo actualizamos si está en estados previos válidos
+        if current_status in ['Publicado']:
+            ref.update({
+                'estado': 'Adjudicado',
+                'forms': firestore.ArrayUnion(['FORM170'])
+            })
+            return True
+        else:
+            # Si ya estaba en otro estado (ej. Contratado), solo agregamos el form tag
+            ref.update({
+                'forms': firestore.ArrayUnion(['FORM170'])
+            })
+    return False
+
+# ✅ NUEVO: Actualizar item desierto
+def update_item_desierto(db, doc_id, causal):
+    ref = db.collection("items").document(doc_id)
+    ref.update({
+        'estado': 'Desierto',
+        'causal_desierto': causal
+    })
