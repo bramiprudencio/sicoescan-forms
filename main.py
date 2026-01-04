@@ -31,20 +31,14 @@ def router_process(cloud_event):
 
     if "FORM100" in name_upper:
         form_100.process_100(content, file_name, db)
-       
     elif "FORM110" in name_upper:
         form_110.process_110(content, file_name, db)
-    ''' 
     elif "FORM170" in name_upper:
         form_170.process_170(content, file_name, db)
-
     elif "FORM400" in name_upper:
         form_400.process_400(content, file_name, db)
     
     elif "FORM500" in name_upper:
-        form_500.process_500(content, file_name, db)
-    
+        form_500.process_500(content, file_name, db)    
     else:
         print(f"Formato no reconocido: {file_name}")
-    '''
-    
