@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 import re
 from shared.utils import clean_text, parse_float, slugify
-from shared.database import (
+from shared.firestore import (
     check_and_update_convocatoria_170,
     get_items_by_cuce,
     update_item_adjudicacion,

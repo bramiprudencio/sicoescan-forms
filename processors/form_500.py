@@ -2,7 +2,7 @@ from bs4 import BeautifulSoup
 import re
 from datetime import datetime
 from shared.utils import clean_text, parse_float, slugify
-from shared.database import (
+from shared.firestore import (
     update_convocatoria_status, 
     get_items_by_cuce, 
     update_item_adjudicacion, 

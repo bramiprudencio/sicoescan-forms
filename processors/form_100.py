@@ -1,7 +1,7 @@
 from bs4 import BeautifulSoup
 import re
 from shared.utils import clean_text, parse_float
-from shared.database import insert_entidad, insert_convocatoria, insert_item
+from shared.firestore import insert_entidad, insert_convocatoria, insert_item
 
 def process_100(html_content, file_name, db):
     print(f"--- Procesando Formulario 100: {file_name} ---")
