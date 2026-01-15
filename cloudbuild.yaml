@@ -1,0 +1,40 @@
+steps:
+  # ============================================================
+  # PASO 1: Construir la imagen usando Buildpacks (pack)
+  # ============================================================
+  - name: 'gcr.io/k8s-skaffold/pack'
+    entrypoint: 'pack'
+    args:
+      - 'build'
+      - 'gcr.io/$PROJECT_ID/sicoes-processor:latest' # Nombre de tu imagen
+      - '--builder=gcr.io/buildpacks/builder:v1'    # El builder oficial de Google (Python, Go, etc.)
+      - '--path=.'                                  # Usar directorio actual
+      - '--env=GOOGLE_FUNCTION_TARGET=router_process' # Asegurar que sepa qué función buscar
+
+  # ============================================================
+  # PASO 2: Desplegar la imagen pre-construida a Cloud Functions
+  # ============================================================
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'functions'
+      - 'deploy'
+      - 'sicoes-processor'
+      - '--gen2'
+      - '--region=us-central1'
+      # AQUÍ ESTÁ EL TRUCO: Desplegamos la imagen, no el código fuente
+      - '--image=gcr.io/$PROJECT_ID/sicoes-processor:latest'
+      - '--runtime=python310'
+      - '--memory=512Mi'
+      - '--concurrency=1'
+      - '--max-instances=50'
+      - '--timeout=300s'
+      # Trigger: Cuando alguien suba algo al bucket
+      - '--trigger-event-filters=type=google.cloud.storage.object.v1.finalized'
+      - '--trigger-event-filters=bucket=TU_NOMBRE_DE_BUCKET' # <--- REEMPLAZA ESTO
+
+images:
+  - 'gcr.io/$PROJECT_ID/sicoes-processor:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
