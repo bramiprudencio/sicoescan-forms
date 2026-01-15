@@ -1,18 +1,22 @@
 steps:
   # ============================================================
-  # PASO 1: Construir la imagen usando Buildpacks (pack)
+  # PASO 1: Construir la imagen usando Docker nativo
   # ============================================================
-  - name: 'gcr.io/k8s-skaffold/pack'
-    entrypoint: 'pack'
-    args:
-      - 'build'
-      - 'gcr.io/$PROJECT_ID/sicoes-processor:latest' # Nombre de tu imagen
-      - '--builder=gcr.io/buildpacks/builder:v1'    # El builder oficial de Google (Python, Go, etc.)
-      - '--path=.'                                  # Usar directorio actual
-      - '--env=GOOGLE_FUNCTION_TARGET=router_process' # Asegurar que sepa qué función buscar
+  - name: 'gcr.io/cloud-builders/docker'
+    args: [
+      'build', 
+      '-t', 'gcr.io/$PROJECT_ID/sicoes-processor:latest', 
+      '.'
+    ]
 
   # ============================================================
-  # PASO 2: Desplegar la imagen pre-construida a Cloud Functions
+  # PASO 2: Subir la imagen al Container Registry (GCR)
+  # ============================================================
+  - name: 'gcr.io/cloud-builders/docker'
+    args: ['push', 'gcr.io/$PROJECT_ID/sicoes-processor:latest']
+
+  # ============================================================
+  # PASO 3: Desplegar esa imagen en Cloud Functions
   # ============================================================
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'gcloud'
@@ -22,14 +26,14 @@ steps:
       - 'sicoes-processor'
       - '--gen2'
       - '--region=us-central1'
-      # AQUÍ ESTÁ EL TRUCO: Desplegamos la imagen, no el código fuente
+      # Referencia a la imagen que acabamos de subir
       - '--image=gcr.io/$PROJECT_ID/sicoes-processor:latest'
-      - '--runtime=python310'
+      # Configuraciones de runtime
       - '--memory=512Mi'
       - '--concurrency=1'
       - '--max-instances=50'
       - '--timeout=300s'
-      # Trigger: Cuando alguien suba algo al bucket
+      # Triggers
       - '--trigger-event-filters=type=google.cloud.storage.object.v1.finalized'
       - '--trigger-event-filters=bucket=TU_NOMBRE_DE_BUCKET' # <--- REEMPLAZA ESTO
 
