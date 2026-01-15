@@ -81,34 +81,17 @@ def insert_convocatoria(
 
     convocatoria_ref.set(data, merge=True)
 
-def insert_item(db, cuce, cod_catalogo, descripcion, medida=None,
-                cantidad_solicitada=None, precio_referencial=None,
-                precio_referencial_total=None, fecha_publicacion=None,
-                estado=None, entidad_nombre=None, 
-                # NUEVOS ARGUMENTOS
-                entidad_cod=None, entidad_departamento=None):
-    
-    doc_id = f"{cuce}_{slugify(descripcion)}"
-    items_ref = db.collection("items").document(doc_id)
-    
-    data = {
-        "cuce": cuce,
-        "cod_catalogo": cod_catalogo,
-        "descripcion": descripcion,
-        "medida": medida,
-        "cantidad_solicitada": cantidad_solicitada,
-        "precio_referencial": precio_referencial,
-        "precio_referencial_total": precio_referencial_total,
-        "fecha_publicacion": fecha_publicacion,
-        "estado": estado,
-        # Guardamos datos desnormalizados para facilitar búsquedas
-        "entidad_cod": entidad_cod,
-        "entidad_nombre": entidad_nombre,
-        "entidad_departamento": entidad_departamento 
-    }
+# shared/database.py
 
-    data = {k: v for k, v in data.items() if v is not None}
-    items_ref.set(data, merge=True)
+def insert_item(db, data, cuce, index):
+    # Generamos el ID secuencial: CUCE_1, CUCE_2, etc.
+    doc_id = f"{cuce}_{index}"
+            
+    data['cuce'] = cuce
+    data['created_at'] = firestore.SERVER_TIMESTAMP
+
+    ref = db.collection("items").document(doc_id)
+    ref.set(data, merge=True)
 
 # ✅ NUEVO: Actualizar estado de convocatoria (Form 500)
 def update_convocatoria_status(db, cuce, nuevo_estado, form_tag):

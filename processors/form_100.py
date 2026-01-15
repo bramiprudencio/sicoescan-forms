@@ -151,6 +151,8 @@ def process_100(html_content, file_name, db):
                     "Código del Catálogo": "cod_catalogo",
                     "Código de Catálogo": "cod_catalogo",
                     "Descripción del bien o servicio": "descripcion",
+                    "Descripción del bien": "descripcion",
+                    "Descripción del servicio": "descripcion",
                     "Unidad de Medida": "medida",
                     "Cantidad": "cantidad_solicitada",
                     "Precio referencial unitario": "precio_referencial",
@@ -163,17 +165,17 @@ def process_100(html_content, file_name, db):
                     if not cols or len(cols) < 2: continue
                     
                     item = {}
-                    b_tag = row.find("b")
-                    if b_tag: b_tag.decompose()
 
                     for i in range(len(cols)):
                         if i < len(headers):
                             key = headers[i]
-                            val = cols[i].get_text().strip()
-                            if key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
-                                item[key] = parse_float(val)
+
+                            if key == 'descripcion':
+                                item[key] = cols[i].decode_contents().strip()
+                            elif key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
+                                item[key] = parse_float(cols[i].get_text().strip())
                             else:
-                                item[key] = clean_text(val)
+                                item[key] = clean_text(cols[i].get_text().strip())
                     items_data.append(item)
 
         # ==========================================
@@ -210,21 +212,9 @@ def process_100(html_content, file_name, db):
             forms="FORM100" 
         )
 
-        for it in items_data:
-            insert_item(
-                db,
-                cuce=convocatoria_data.get('cuce'),
-                cod_catalogo=it.get('cod_catalogo'),
-                descripcion=it.get('descripcion'),
-                medida=it.get('medida'),
-                cantidad_solicitada=it.get('cantidad_solicitada'),
-                precio_referencial=it.get('precio_referencial'),
-                precio_referencial_total=it.get('precio_referencial_total'),
-                entidad_cod=entidad_data.get('cod'),
-                entidad_nombre=entidad_data.get('nombre'),
-                # AQUI TAMBIEN
-                entidad_departamento=entidad_data.get('departamento')
-            )
+        for i, item in enumerate(items_data):
+            # i empieza en 0, así que enviamos i + 1 para que el ID sea CUCE_1, CUCE_2...
+            insert_item(db, item, convocatoria_cuce, i + 1)
 
         print(f"✅ Formulario 100 procesado: {convocatoria_data.get('cuce')}")
 
