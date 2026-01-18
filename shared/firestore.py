@@ -88,7 +88,6 @@ def insert_item(db, data, cuce, index):
     doc_id = f"{cuce}_{index}"
             
     data['cuce'] = cuce
-    data['created_at'] = firestore.SERVER_TIMESTAMP
 
     ref = db.collection("items").document(doc_id)
     ref.set(data, merge=True)

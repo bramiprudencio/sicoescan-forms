@@ -214,7 +214,7 @@ def process_100(html_content, file_name, db):
 
         for i, item in enumerate(items_data):
             # i empieza en 0, así que enviamos i + 1 para que el ID sea CUCE_1, CUCE_2...
-            insert_item(db, item, convocatoria_cuce, i + 1)
+            insert_item(db, item, convocatoria_data.get('cuce'), i + 1)
 
         print(f"✅ Formulario 100 procesado: {convocatoria_data.get('cuce')}")
 

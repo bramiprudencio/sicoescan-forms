@@ -116,12 +116,11 @@ def pre_scan_items(html_content, mock_db):
         
 # ==========================================
 # 3. CONFIGURACIÓN Y EJECUCIÓN
-# ==========================================
+# ==========================================24-1704-00-1513873-1-1
 
 TEST_URL = "https://storage.googleapis.com/sicoescan/forms/24-1704-00-1513873-1-1_FORM500_1.html"
 
 def run_test():
-    print(f"🧪 Iniciando prueba DRY RUN (Mejorada)")
     print(f"📄 URL: {TEST_URL}\n")
 
     try:

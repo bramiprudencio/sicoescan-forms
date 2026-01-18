@@ -99,6 +99,8 @@ def process_500(html_content, file_name, db):
                                 item[key] = cols[i].decode_contents().strip()
                             else:
                                 item[key] = clean_text(cols[i].get_text(strip=True))
+
+                    print(f"   ➡️ Item extraído: {item.get('descripcion', '')[:30]}...")
                     
                     # --- LÓGICA DE MATCHING Y UPDATE (RECEPCIÓN) ---
                     incoming_desc = clean_text(item.get('descripcion', ''))
