@@ -1,6 +1,8 @@
 from datetime import datetime, date
 import unicodedata, re
 
+from bs4 import BeautifulSoup
+
 def clean_text(text):
     if text:
         return re.sub(r'\s+', ' ', text).strip()
@@ -18,6 +20,20 @@ def slugify(value: str) -> str:
         return clean.lower()
     return None
 
+# --- Función Helper para crear IDs limpios ---
+def generate_slug(text):
+    if not text: return "item"
+    # 1. Quitar HTML tags (si quedaron)
+    text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
+    # 2. Normalizar unicode (quitar acentos: canción -> cancion)
+    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+    # 3. Quitar caracteres que no sean alfanuméricos o espacios
+    text = re.sub(r'[^\w\s-]', '', text).lower()
+    # 4. Reemplazar espacios por guiones bajos
+    text = re.sub(r'[-\s]+', '_', text).strip('-_')
+    # 5. Cortar si es extremadamente largo (Firestore soporta ids largos, pero mejor prevenir)
+    return text[:60]
+
 def parse_date(value):
     """Accepts datetime, date, ISO strings, or DD/MM/YYYY strings."""
     if not value:
@@ -34,7 +50,7 @@ def parse_date(value):
         return datetime.strptime(value, "%d/%m/%Y")
     except Exception:
         return None
-
+    
 def parse_float(value):
     """
     Parses a float from a string, handling both US (1,000.00) 

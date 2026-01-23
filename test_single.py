@@ -118,7 +118,7 @@ def pre_scan_items(html_content, mock_db):
 # 3. CONFIGURACIÓN Y EJECUCIÓN
 # ==========================================24-1704-00-1513873-1-1
 
-TEST_URL = "https://storage.googleapis.com/sicoescan/forms/24-1704-00-1513873-1-1_FORM500_1.html"
+TEST_URL = "https://storage.googleapis.com/sicoescan/forms/20-0006-00-1064736-2-1_FORM500_1.html"
 
 def run_test():
     print(f"📄 URL: {TEST_URL}\n")
@@ -151,7 +151,7 @@ def run_test():
         
         elif "FORM170" in name_upper:
             print("⚙️ Preparando entorno para FORM 170...")
-            # Podrías hacer una función similar pre_scan para el 170 si lo necesitas
+            pre_scan_items(html_content, mock_db) # <--- AQUÍ ESTÁ EL TRUCO
             form_170.process_170(html_content, file_name, mock_db)
 
         elif "FORM100" in name_upper:

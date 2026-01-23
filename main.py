@@ -3,7 +3,7 @@ from google.cloud import storage
 from google.cloud import firestore
 
 # Importamos los módulos de nuestras carpetas
-from processors import form_100, form_110, form_170, form_400, form_500
+from processors import form_100, form_110, form_170, form_200, form_400, form_500
 
 # Inicializamos clientes una sola vez (Global Scope)
 storage_client = storage.Client()
@@ -35,6 +35,8 @@ def router_process(cloud_event):
         form_110.process_110(content, file_name, db)
     elif "FORM170" in name_upper:
         form_170.process_170(content, file_name, db)
+    elif "FORM200" in name_upper:
+        form_200.process_200(content, file_name, db)
     elif "FORM400" in name_upper:
         form_400.process_400(content, file_name, db)
     

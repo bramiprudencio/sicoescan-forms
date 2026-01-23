@@ -29,7 +29,8 @@ def insert_entidad(db, cod, nombre, fax=None, telefono=None,
 
 # ✅ Insertar o Actualizar una convocatoria
 def insert_convocatoria(
-    db, cuce, cod_entidad, fecha_publicacion, objeto,
+    db, cuce, cod_entidad=None,
+    fecha_publicacion=None, objeto=None,
     modalidad=None, subasta=None, concesion=None,
     tipo_convocatoria=None, forma_adjudicacion=None,
     normativa=None, tipo_contratacion=None,
@@ -38,8 +39,7 @@ def insert_convocatoria(
     recurrente_sgte_gestion=None, total=None,
     fecha_presentacion=None, fecha_adjudicacion=None,
     fecha_formalizacion=None, fecha_entrega=None,
-    estado=None, forms=None, 
-    # NUEVOS ARGUMENTOS
+    estado=None, forms=None,
     entidad_nombre=None, entidad_departamento=None 
 ):
     convocatoria_ref = db.collection("convocatorias").document(cuce)
@@ -50,7 +50,6 @@ def insert_convocatoria(
         "entidad_departamento": entidad_departamento, # Guardamos departamento
         "fecha_publicacion": fecha_publicacion,
         "objeto": objeto,
-        # ... (resto de campos igual) ...
         "modalidad": modalidad,
         "subasta": subasta,
         "concesion": concesion,
@@ -83,20 +82,14 @@ def insert_convocatoria(
 
 # shared/database.py
 
-def insert_item(db, data, cuce, index):
-    # Generamos el ID secuencial: CUCE_1, CUCE_2, etc.
-    doc_id = f"{cuce}_{index}"
-            
-    data['cuce'] = cuce
-
-    ref = db.collection("items").document(doc_id)
-    ref.set(data, merge=True)
+# Ejemplo de cómo debería verse insert_item ahora:
+def insert_item(db, data, cuce, item_identifier):
+    doc_id = f"{cuce}_{item_identifier}"
+    db.collection("items").document(doc_id).set(data, merge=True)
 
 # ✅ NUEVO: Actualizar estado de convocatoria (Form 500)
 def update_convocatoria_status(db, cuce, nuevo_estado, form_tag):
     ref = db.collection("convocatorias").document(cuce)
-    
-    # Usamos update porque el documento DEBE existir
     try:
         ref.update({
             "estado": nuevo_estado,

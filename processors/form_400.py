@@ -1,7 +1,21 @@
 from bs4 import BeautifulSoup
 import re
-from shared.utils import clean_text, parse_float
+import unicodedata
+from shared.utils import clean_text, parse_float, generate_slug
 from shared.firestore import insert_entidad, insert_convocatoria, insert_item
+
+# --- Función Helper para crear IDs limpios ---
+def generate_slug(text):
+    if not text: return "item"
+    # 1. Quitar HTML tags (si quedaron)
+    text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
+    # 2. Normalizar unicode (quitar acentos)
+    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+    # 3. Quitar caracteres especiales
+    text = re.sub(r'[^\w\s-]', '', text).lower()
+    # 4. Reemplazar espacios
+    text = re.sub(r'[-\s]+', '_', text).strip('-_')
+    return text[:60]
 
 def process_400(html_content, file_name, db):
     print(f"--- Procesando Formulario 400: {file_name} ---")
@@ -33,11 +47,11 @@ def process_400(html_content, file_name, db):
                 "cod": cod_raw,
                 "nombre": clean_text(entidad_fila[3].get_text(strip=True)),
                 "fax": clean_text(entidad_fila[4].get_text(strip=True)),
-                "telefono": None, # No suele estar en esta tabla del 400
+                "telefono": None, 
                 "departamento": None
             }
 
-            # --- LÓGICA COPIADA DEL FORM 100: CONSULTAR DEPARTAMENTO ---
+            # --- CONSULTAR DEPARTAMENTO ---
             if entidad_data.get("cod"):
                 entidad_ref = db.collection("entidades").document(entidad_data["cod"])
                 entidad_snap = entidad_ref.get()
@@ -144,13 +158,13 @@ def process_400(html_content, file_name, db):
                     "Código del Catálogo (UNSPSC)": "cod_catalogo",
                     "Descripción del bien o servicio": "descripcion",
                     "Descripción del bien, obra, servicio general o de consultoría": "descripcion",
-                    "Unidad de Medida": "unidad",          # Estandarizado
-                    "Unidad de medida": "unidad",          # Estandarizado
-                    "Cantidad": "cantidad",                # Estandarizado
-                    "Cantidad / Cantidad estimada si es variable": "cantidad", # Estandarizado
-                    "Precio unitario": "precio_unitario",       # Estandarizado
-                    "Precio referencial unitario": "precio_unitario", # Estandarizado
-                    "Precio referencial total": "precio_total",      # Estandarizado
+                    "Unidad de Medida": "unidad",          
+                    "Unidad de medida": "unidad",          
+                    "Cantidad": "cantidad",                
+                    "Cantidad / Cantidad estimada si es variable": "cantidad", 
+                    "Precio unitario": "precio_unitario",       
+                    "Precio referencial unitario": "precio_unitario", 
+                    "Precio referencial total": "precio_total",      
                     "Monto total (p.unit. x cantidad) / Total estimado cuando la cantidad es variable": "precio_total",
                     "Origen del item": "origen"
                 }
@@ -161,7 +175,6 @@ def process_400(html_content, file_name, db):
                     if not cols or len(cols) < 2: continue
                     
                     item = {}
-                    # ELIMINADO: b.decompose() -> Ya no borramos las negrillas antes de leer
                     
                     for i in range(len(cols)):
                         if i < len(headers):
@@ -170,10 +183,8 @@ def process_400(html_content, file_name, db):
                             # LOGICA CLAVE: Mantener HTML en descripción
                             if key == 'descripcion':
                                 item[key] = cols[i].decode_contents().strip()
-                            # Parseo de numéricos
                             elif key in ['cantidad', 'precio_unitario', 'precio_total']:
                                 item[key] = parse_float(cols[i].get_text(strip=True))
-                            # Limpieza normal para el resto
                             else:
                                 item[key] = clean_text(cols[i].get_text(strip=True))
                     
@@ -187,7 +198,7 @@ def process_400(html_content, file_name, db):
             cuce=convocatoria_data.get('cuce'),
             cod_entidad=entidad_data.get('cod'),
             entidad_nombre=entidad_data.get('nombre'),
-            entidad_departamento=entidad_data.get('departamento'), # Se pasa el recuperado
+            entidad_departamento=entidad_data.get('departamento'), 
             fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
             objeto=convocatoria_data.get('objeto'),
             modalidad=convocatoria_data.get('modalidad'),
@@ -202,16 +213,33 @@ def process_400(html_content, file_name, db):
             forms="FORM400"
         )
 
-        for i, it in enumerate(items_data):
-            # Inyectamos datos de contexto que no vienen en la tabla
-            it['entidad_cod'] = entidad_data.get('cod')
-            it['entidad_nombre'] = entidad_data.get('nombre')
-            it['entidad_departamento'] = entidad_data.get('departamento')
-            it['tipo_form'] = "FORM400"
-            it['estado'] = "Solicitado"
+        # Set para controlar duplicados de slugs
+        used_slugs = set()
 
-            # Llamada genérica (i+1 para empezar en 1)
-            insert_item(db, it, convocatoria_data.get('cuce'), i + 1)
+        for i, item in enumerate(items_data):
+            # A. Inyección de datos
+            item['entidad_cod'] = entidad_data.get('cod')
+            item['entidad_nombre'] = entidad_data.get('nombre')
+            item['entidad_departamento'] = entidad_data.get('departamento')
+            item['modalidad'] = convocatoria_data.get('modalidad')
+            item['tipo_convocatoria'] = convocatoria_data.get('tipo_convocatoria')
+            item['estado'] = "Publicado"
+
+            # B. Generación de Slug
+            raw_desc = it.get('descripcion', f'item_{i}')
+            slug_base = generate_slug(raw_desc)
+            
+            # C. Manejo de duplicados
+            slug_final = slug_base
+            counter = 1
+            while slug_final in used_slugs:
+                slug_final = f"{slug_base}_{counter}"
+                counter += 1
+            
+            used_slugs.add(slug_final)
+
+            # D. Insertar con slug
+            insert_item(db, it, convocatoria_data.get('cuce'), slug_final)
 
         print(f"✅ Formulario 400 procesado: {convocatoria_data.get('cuce')}")
 

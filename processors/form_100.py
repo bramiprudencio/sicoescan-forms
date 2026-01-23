@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 import re
-from shared.utils import clean_text, parse_float
+import unicodedata # <--- IMPORTANTE: Agrega esto para quitar acentos
+from shared.utils import clean_text, parse_float, generate_slug
 from shared.firestore import insert_entidad, insert_convocatoria, insert_item
 
 def process_100(html_content, file_name, db):
@@ -18,7 +19,7 @@ def process_100(html_content, file_name, db):
     items_data = []
 
     # ==========================================
-    # 1. ENTIDAD (Extracción y Consulta)
+    # 1. ENTIDAD 
     # ==========================================
     try:
         section_title = soup.find("td", string="1. IDENTIFICACIÓN DE LA ENTIDAD")
@@ -30,25 +31,16 @@ def process_100(html_content, file_name, db):
                 "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
                 "fax": clean_text(entidad_fila[2].get_text(strip=True)),
                 "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
-                "departamento": None # Inicializamos en None
+                "departamento": None 
             }
 
-            # --- NUEVA LÓGICA: CONSULTAR DEPARTAMENTO EN FIRESTORE ---
             if entidad_data.get("cod"):
-                # 1. Referencia al documento de la entidad
                 entidad_ref = db.collection("entidades").document(entidad_data["cod"])
-                
-                # 2. Obtenemos el documento (Snapshot)
                 entidad_snapshot = entidad_ref.get()
 
                 if entidad_snapshot.exists:
-                    existing_data = entidad_snapshot.to_dict()
-                    # 3. Extraemos el departamento si existe
-                    entidad_data["departamento"] = existing_data.get("departamento")
-                    # print(f"Departamento recuperado: {entidad_data['departamento']}")
+                    entidad_data["departamento"] = entidad_snapshot.to_dict().get("departamento")
                 
-                # 4. Actualizamos/Creamos la entidad con los datos nuevos del form (fax, tel)
-                # Nota: Esto NO borrará el departamento gracias a la lógica en database.py
                 insert_entidad(
                     db, 
                     entidad_data["cod"], 
@@ -105,6 +97,7 @@ def process_100(html_content, file_name, db):
         # ==========================================
         # 3. CRONOGRAMA
         # ==========================================
+        # (Sin cambios aquí, mantengo tu lógica resumida para no ocupar espacio visual)
         cronograma_title_td = soup.find('td', class_='FormularioSubtitulo', string=re.compile(r'CRONOGRAMA DE (PROCESO|ACTIVIDADES)', re.IGNORECASE))
         if cronograma_title_td:
             cronograma_table = cronograma_title_td.parent.find_next_sibling('tr').find('table')
@@ -112,18 +105,14 @@ def process_100(html_content, file_name, db):
             def get_date_val(pattern):
                 cell = cronograma_table.find('td', string=re.compile(pattern))
                 return clean_text(cell.find_next_sibling('td').get_text()) if cell else None
-
+            
+            # Limpieza de columnas extrañas del cronograma
             first_row = cronograma_table.find('tr').find_all('td')
-            cronograma_cols = []
-            for i in range(len(first_row)):
-                txt = first_row[i].get_text()
-                if 'Actividad' in txt or 'Fecha' in txt:
-                    cronograma_cols.append(i)
+            cronograma_cols = [i for i, cell in enumerate(first_row) if 'Actividad' in cell.get_text() or 'Fecha' in cell.get_text()]
             
             for row in cronograma_table.find_all('tr'):
                 for i, cell in enumerate(row.find_all('td')):
-                    if i not in cronograma_cols:
-                        cell.decompose()
+                    if i not in cronograma_cols: cell.decompose()
             
             convocatoria_data['fecha_presentacion'] = get_date_val(r'Presentación')
             convocatoria_data['fecha_adjudicacion'] = get_date_val(r'Adjudicación')
@@ -149,10 +138,7 @@ def process_100(html_content, file_name, db):
                 headers = [h.get_text(strip=True) for h in rows[0].find_all("td")]
                 map_headers = {
                     "Código del Catálogo": "cod_catalogo",
-                    "Código de Catálogo": "cod_catalogo",
                     "Descripción del bien o servicio": "descripcion",
-                    "Descripción del bien": "descripcion",
-                    "Descripción del servicio": "descripcion",
                     "Unidad de Medida": "medida",
                     "Cantidad": "cantidad_solicitada",
                     "Precio referencial unitario": "precio_referencial",
@@ -169,7 +155,7 @@ def process_100(html_content, file_name, db):
                     for i in range(len(cols)):
                         if i < len(headers):
                             key = headers[i]
-
+                            # Mantenemos HTML en descripción
                             if key == 'descripcion':
                                 item[key] = cols[i].decode_contents().strip()
                             elif key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
@@ -179,7 +165,7 @@ def process_100(html_content, file_name, db):
                     items_data.append(item)
 
         # ==========================================
-        # 5. GUARDADO (PASANDO EL DEPARTAMENTO)
+        # 5. GUARDADO CON SLUGS
         # ==========================================
         
         insert_convocatoria(
@@ -187,7 +173,6 @@ def process_100(html_content, file_name, db):
             cuce=convocatoria_data.get('cuce'),
             cod_entidad=entidad_data.get('cod'),
             entidad_nombre=entidad_data.get('nombre'),
-            # AQUI pasamos el departamento obtenido de Firestore
             entidad_departamento=entidad_data.get('departamento'), 
             fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
             objeto=convocatoria_data.get('objeto'),
@@ -212,9 +197,30 @@ def process_100(html_content, file_name, db):
             forms="FORM100" 
         )
 
+        # Set para controlar duplicados dentro del mismo form
+        used_slugs = set()
+
         for i, item in enumerate(items_data):
-            # i empieza en 0, así que enviamos i + 1 para que el ID sea CUCE_1, CUCE_2...
-            insert_item(db, item, convocatoria_data.get('cuce'), i + 1)
+            item['entidad_cod'] = entidad_data.get('cod')
+            item['entidad_nombre'] = entidad_data.get('nombre')
+            item['entidad_departamento'] = entidad_data.get('departamento')
+            item['modalidad'] = convocatoria_data.get('modalidad')
+            item['estado'] = "Publicado"
+            item['tipo_convocatoria'] = convocatoria_data.get('tipo_convocatoria')
+
+            # 1. Generar Slug Base
+            raw_desc = item.get('descripcion', f'item_{i}')
+            slug_base = generate_slug(raw_desc)
+            
+            # 2. Manejo de duplicados (Ej: dos items "Papel Bond")
+            slug_final = slug_base
+            counter = 1
+            while slug_final in used_slugs:
+                slug_final = f"{slug_base}_{counter}"
+                counter += 1
+            
+            used_slugs.add(slug_final)
+            insert_item(db, item, convocatoria_cuce, slug_final)
 
         print(f"✅ Formulario 100 procesado: {convocatoria_data.get('cuce')}")
 

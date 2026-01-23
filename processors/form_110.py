@@ -1,6 +1,6 @@
 from bs4 import BeautifulSoup
 import re
-from shared.utils import clean_text, parse_float
+from shared.utils import clean_text, parse_float, generate_slug
 from shared.firestore import insert_entidad, insert_convocatoria, insert_item
 
 def process_110(html_content, file_name, db):
@@ -30,19 +30,17 @@ def process_110(html_content, file_name, db):
                 "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
                 "fax": clean_text(entidad_fila[2].get_text(strip=True)),
                 "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
-                "departamento": None # Inicializamos
+                "departamento": None 
             }
 
             # --- CONSULTA DE DEPARTAMENTO ---
             if entidad_data.get("cod"):
-                # Buscamos si la entidad ya existe para traer su departamento
                 entidad_ref = db.collection("entidades").document(entidad_data["cod"])
                 entidad_snap = entidad_ref.get()
                 
                 if entidad_snap.exists:
                     entidad_data["departamento"] = entidad_snap.get("departamento")
 
-                # Guardamos/Actualizamos la entidad (Upsert)
                 insert_entidad(
                     db, 
                     entidad_data["cod"], 
@@ -97,7 +95,7 @@ def process_110(html_content, file_name, db):
         except:
             pass
         
-        # Cronograma (Específico Form 110)
+        # Cronograma
         cronograma_title_td = soup.find('td', class_='FormularioSubtitulo', string=re.compile(r'CRONOGRAMA DE (PROCESO|ACTIVIDADES)', re.IGNORECASE))
         if cronograma_title_td:
             cronograma_table = cronograma_title_td.parent.find_next_sibling('tr').find('table')
@@ -118,10 +116,8 @@ def process_110(html_content, file_name, db):
         if items_section:
             items_table = items_section.find_parent("tr").find_parent("table")
             
-            # Limpiar tablas anidadas
             [item.decompose() for item in items_table.find_all('table')]
             
-            # Total General
             try:
                 total_raw = items_table.find_all("td")[-1].get_text()
                 convocatoria_data['total'] = parse_float(total_raw)
@@ -130,7 +126,6 @@ def process_110(html_content, file_name, db):
 
             rows = items_table.find_all("tr")
             
-            # Cabecera en índice 1 (Tu lógica)
             if len(rows) > 1:
                 headers = [h.get_text(strip=True) for h in rows[1].find_all("td")]
                 
@@ -146,34 +141,38 @@ def process_110(html_content, file_name, db):
                 }
                 headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
 
-                # Iterar desde fila 2 hasta la penúltima (rows[2:-1]) (Tu lógica)
+                # Iteramos desde la 2da hasta la penúltima (donde suele estar el total)
                 for row in rows[2:-1]:
                     cols = row.find_all("td", recursive=False)
                     
-                    # Validar fila válida (comienza con número)
                     if not cols or len(cols) < 2 or not re.fullmatch(r"[0-9]+", cols[0].get_text(strip=True)):
                         continue
                     
                     item = {}
                     
-                    # Limpiar tags <b> de descripción
+                    # Limpiamos tag <b> para que la descripción quede limpia
+                    # (Esto ayuda a que el slug salga mejor después)
                     b = row.find("b")
-                    if b: b.decompose()
+                    if b: 
+                        # Extraemos el texto del <b> y lo reemplazamos en el árbol
+                        b.replace_with(b.get_text())
 
                     for i in range(len(cols)):
                         if i < len(headers):
                             key = headers[i]
-                            val = cols[i].get_text().strip()
+                            # Usamos decode_contents para mantener estructura si la hubiera, 
+                            # aunque ya limpiamos el <b> arriba
+                            val = cols[i].decode_contents().strip()
                             
                             if key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
-                                item[key] = parse_float(val)
+                                item[key] = parse_float(cols[i].get_text())
                             else:
-                                item[key] = clean_text(val)
+                                item[key] = clean_text(cols[i].get_text())
                     
                     items_data.append(item)
 
         # ==========================================
-        # 4. GUARDADO FINAL
+        # 4. GUARDADO FINAL (CON CAMPOS EXTRA Y SLUGS)
         # ==========================================
         
         insert_convocatoria(
@@ -181,7 +180,7 @@ def process_110(html_content, file_name, db):
             cuce=convocatoria_data.get('cuce'),
             cod_entidad=entidad_data.get('cod'),
             entidad_nombre=entidad_data.get('nombre'),
-            entidad_departamento=entidad_data.get('departamento'), # <--- AQUÍ PASAMOS EL DEPTO
+            entidad_departamento=entidad_data.get('departamento'),
             fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
             objeto=convocatoria_data.get('objeto'),
             modalidad=convocatoria_data.get('modalidad'),
@@ -204,20 +203,33 @@ def process_110(html_content, file_name, db):
             forms="FORM110"
         )
 
-        for it in items_data:
-            insert_item(
-                db,
-                cuce=convocatoria_data.get('cuce'),
-                cod_catalogo=it.get('cod_catalogo'),
-                descripcion=it.get('descripcion'),
-                medida=it.get('medida'),
-                cantidad_solicitada=it.get('cantidad_solicitada'),
-                precio_referencial=it.get('precio_referencial'),
-                precio_referencial_total=it.get('precio_referencial_total'),
-                entidad_cod=entidad_data.get('cod'),
-                entidad_nombre=entidad_data.get('nombre'),
-                entidad_departamento=entidad_data.get('departamento') # <--- AQUÍ TAMBIÉN
-            )
+        # Set para controlar duplicados dentro de la misma convocatoria
+        used_slugs = set()
+
+        for i, item in enumerate(items_data):
+            # A. Inyección de datos de entidad y modalidad
+            item['entidad_cod'] = entidad_data.get('cod')
+            item['entidad_nombre'] = entidad_data.get('nombre')
+            item['entidad_departamento'] = entidad_data.get('departamento')
+            item['modalidad'] = convocatoria_data.get('modalidad')
+            item['estado'] = "Publicado"
+            item['tipo_convocatoria'] = convocatoria_data.get('tipo_convocatoria')
+
+            # B. Generación de Slug (ID legible)
+            raw_desc = item.get('descripcion', f'item_{i}')
+            slug_base = generate_slug(raw_desc)
+            
+            # C. Manejo de duplicados
+            slug_final = slug_base
+            counter = 1
+            while slug_final in used_slugs:
+                slug_final = f"{slug_base}_{counter}"
+                counter += 1
+            
+            used_slugs.add(slug_final)
+
+            # D. Insertar pasando el item completo y el slug
+            insert_item(db, item, convocatoria_data.get('cuce'), slug_final)
 
         print(f"✅ Formulario 110 procesado: {convocatoria_data.get('cuce')}")
 
