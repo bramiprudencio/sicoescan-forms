@@ -118,3 +118,10 @@ def parse_bool(value):
     if value is None:
         return None
     return str(value).strip().lower() == "si"
+
+def normalize_for_match(text):
+    if not text: return ""
+    # Quitar HTML, acentos, mayúsculas y espacios extra
+    text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
+    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
+    return re.sub(r'\s+', ' ', text).strip().lower()

@@ -207,3 +207,8 @@ marimo/_lsp/
 __marimo__/
 
 firebase-credentials.json
+todos.txt
+all_forms.txt
+backfill.py
+manual_sicoes.pdf
+test_single.py
