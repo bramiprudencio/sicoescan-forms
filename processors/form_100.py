@@ -1,228 +1,228 @@
 from bs4 import BeautifulSoup
 import re
-import unicodedata # <--- IMPORTANTE: Agrega esto para quitar acentos
-from shared.utils import clean_text, parse_float, generate_slug
-from shared.firestore import insert_entidad, insert_convocatoria, insert_item
-
+from shared.utils import (
+    clean_text,
+    extract_cronograma,
+    extract_modalidad,
+    generate_slug,
+    parse_float
+)
+from shared.firestore import (
+    insert_convocatoria,
+    insert_entidad,
+    insert_item
+)
 def process_100(html_content, file_name, db):
-    print(f"--- Procesando Formulario 100: {file_name} ---")
-    
-    try:
-        soup = BeautifulSoup(html_content, 'html.parser')
-    except Exception as e:
-        print(f"Error parseando HTML en {file_name}: {e}")
-        return
+  print(f"--- Procesando Formulario 100: {file_name} ---")
+  
+  try:
+    soup = BeautifulSoup(html_content, 'html.parser')
+  except Exception as e:
+    print(f"Error parseando HTML en {file_name}: {e}")
+    return
 
-    # Variables
-    entidad_data = {}
-    convocatoria_data = {}
-    items_data = []
+  entidad_data = {}
+  convocatoria_data = {}
+  items_data = []
 
-    # ==========================================
-    # 1. ENTIDAD 
-    # ==========================================
-    try:
-        section_title = soup.find("td", string="1. IDENTIFICACIÓN DE LA ENTIDAD")
-        if section_title:
-            entidad_fila = section_title.find_parent("table").find_all("tr")[-1].find_all("td")
-            
-            entidad_data = {
-                "cod": clean_text(entidad_fila[0].get_text(strip=True)),
-                "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
-                "fax": clean_text(entidad_fila[2].get_text(strip=True)),
-                "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
-                "departamento": None 
-            }
+  # ==========================================
+  # 1. ENTIDAD 
+  # ==========================================
+  try:
+    section_title = soup.find("td", string="1. IDENTIFICACIÓN DE LA ENTIDAD")
+    if section_title:
+      entidad_fila = section_title.find_parent("table").find_all("tr")[-1].find_all("td")
+      
+      entidad_data = {
+        "cod": clean_text(entidad_fila[0].get_text(strip=True)),
+        "nombre": clean_text(entidad_fila[1].get_text(strip=True)),
+        "fax": clean_text(entidad_fila[2].get_text(strip=True)),
+        "telefono": clean_text(entidad_fila[3].get_text(strip=True)),
+        "departamento": None 
+      }
 
-            if entidad_data.get("cod"):
-                entidad_ref = db.collection("entidades").document(entidad_data["cod"])
-                entidad_snapshot = entidad_ref.get()
+      if entidad_data.get("cod"):
+        entidad_ref = db.collection("entidades").document(entidad_data["cod"])
+        entidad_snapshot = entidad_ref.get()
 
-                if entidad_snapshot.exists:
-                    entidad_data["departamento"] = entidad_snapshot.to_dict().get("departamento")
-                
-                insert_entidad(
-                    db, 
-                    entidad_data["cod"], 
-                    entidad_data["nombre"], 
-                    entidad_data["fax"], 
-                    entidad_data["telefono"]
-                )
-
-    except Exception as e:
-        print(f"Error procesando entidad en {file_name}: {e}")
-
-    # ==========================================
-    # 2. CONVOCATORIA
-    # ==========================================
-    try:
-        convocatoria_cuce = soup.find('td', class_='FormularioCUCE')
-        if convocatoria_cuce:
-            convocatoria_data['cuce'] = clean_text(convocatoria_cuce.get_text())
+        if entidad_snapshot.exists:
+          entidad_data["departamento"] = entidad_snapshot.to_dict().get("departamento")
         else:
-            print(f"Advertencia: No se encontró CUCE en {file_name}")
-            return 
+          insert_entidad(
+            db, 
+            entidad_data["cod"], 
+            entidad_data["nombre"], 
+            fax=entidad_data["fax"], 
+            telefono=entidad_data["telefono"]
+          )
 
-        mapping = {
-            'Fecha de publicación (en el SICOES)': 'fecha_publicacion',
-            'Objeto de la Contratación': 'objeto',
-            'Subasta': 'subasta',
-            'Concesión Administrativa': 'concesion',
-            'Tipo de convocatoria': 'tipo_convocatoria',
-            'Forma de adjudicación': 'forma_adjudicacion',
-            'Normativa utilizada': 'normativa',
-            'Tipo de contratación': 'tipo_contratacion',
-            'Método de selección y adjudicación': 'metodo_seleccion',
-            'Garantías solicitadas': 'garantias',
-            'Moneda considerada para el proceso': 'moneda',
-            'Elaboración del DBC': 'elaboracion_dbc',
-            'Bienes o servicios recurrentes con cargo a la siguiente gestión:': 'recurrente_sgte_gestion',
+  except Exception as e:
+      print(f"Error procesando entidad en {file_name}: {e}")
+
+  # ==========================================
+  # 2. CONVOCATORIA
+  # ==========================================
+  try:
+    convocatoria_cuce = soup.find('td', class_='FormularioCUCE')
+    if convocatoria_cuce:
+      convocatoria_data['cuce'] = clean_text(convocatoria_cuce.get_text())
+    else:
+      print(f"Advertencia: No se encontró CUCE en {file_name}")
+      return 
+
+    mapping = {
+      'Fecha de publicación (en el SICOES)': 'fecha_publicacion',
+      'Fecha de publicación': 'fecha_publicacion',
+      'Objeto de la Contratación': 'objeto',
+      'Subasta': 'subasta',
+      'Concesión Administrativa': 'concesion',
+      'Tipo de convocatoria': 'tipo_convocatoria',
+      'Forma de adjudicación': 'forma_adjudicacion',
+      'Normativa utilizada': 'normativa',
+      'Tipo de contratación': 'tipo_contratacion',
+      'Método de selección y adjudicación': 'metodo_seleccion',
+      'Garantías solicitadas': 'garantias',
+      'Moneda considerada para el proceso': 'moneda',
+      'Elaboración del DBC': 'elaboracion_dbc',
+      'Bienes o servicios recurrentes con cargo a la siguiente gestión:': 'recurrente_sgte_gestion',
+    }
+
+    for label_text, key in mapping.items():
+      label_td = soup.find('td', class_=re.compile(r'FormularioEtiqueta'), string=re.compile(re.escape(label_text), re.IGNORECASE))
+      if label_td:
+        value_td = label_td.find_next_sibling('td', class_=re.compile(r'FormularioDato'))
+        if value_td:
+          convocatoria_data[key] = clean_text(value_td.get_text())
+
+    # Modalidad
+    convocatoria_data['modalidad'] = extract_modalidad(soup)
+
+    # Cronograma
+    cronograma_extracted = extract_cronograma(soup)
+    convocatoria_data.update(cronograma_extracted)
+
+    # ==========================================
+    # 3. ITEMS Y TOTAL
+    # ==========================================
+    items_table = soup.find("td", string=re.compile(r'Código del? Catálogo'))
+    
+    if items_table:
+      items_table = items_table.find_parent("tr").find_parent("table")
+
+      items_cols_size = len(soup.find("td", string=re.compile(r'Código del? Catálogo')).find_parent("tr").find_all('td'))
+      [table.decompose() for table in items_table.find_all('table')]
+      [row.decompose() for row in items_table.find_all("tr") if len(row.find_all('td')) != items_cols_size]
+      
+      rows = items_table.find_all("tr")
+      if len(rows) > 0:
+        headers = [h.get_text(strip=True) for h in rows[0].find_all("td")]
+        map_headers = {
+          "Código del Catálogo": "catalogo_cod",
+          "Descripción del bien o servicio": "descripcion",
+          "Unidad de Medida": "medida",
+          "Cantidad": "cantidad_solicitada",
+          "Precio referencial unitario": "precio_referencial",
+          "Precio referencial total": "precio_referencial_total"
         }
+        headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
 
-        for label_text, key in mapping.items():
-            label_td = soup.find('td', class_=re.compile(r'FormularioEtiqueta'), string=re.compile(re.escape(label_text), re.IGNORECASE))
-            if label_td:
-                value_td = label_td.find_next_sibling('td', class_=re.compile(r'FormularioDato'))
-                if value_td:
-                    convocatoria_data[key] = clean_text(value_td.get_text())
+        for row in rows[1:]:
+          cols = row.find_all("td")
 
-        # Modalidad
-        try:
-            modalidad_td = soup.find("td", string="Modalidad")
-            if modalidad_td:
-                convocatoria_data['modalidad'] = clean_text(modalidad_td.find_parent("tr").find_next_sibling("tr").find_all("td")[0].get_text(strip=True))
-        except:
-            pass
+          if not cols or len(cols) < 2 or cols[0].get_text().startswith("#"): continue
 
-        # ==========================================
-        # 3. CRONOGRAMA
-        # ==========================================
-        # (Sin cambios aquí, mantengo tu lógica resumida para no ocupar espacio visual)
-        cronograma_title_td = soup.find('td', class_='FormularioSubtitulo', string=re.compile(r'CRONOGRAMA DE (PROCESO|ACTIVIDADES)', re.IGNORECASE))
-        if cronograma_title_td:
-            cronograma_table = cronograma_title_td.parent.find_next_sibling('tr').find('table')
-            
-            def get_date_val(pattern):
-                cell = cronograma_table.find('td', string=re.compile(pattern))
-                return clean_text(cell.find_next_sibling('td').get_text()) if cell else None
-            
-            # Limpieza de columnas extrañas del cronograma
-            first_row = cronograma_table.find('tr').find_all('td')
-            cronograma_cols = [i for i, cell in enumerate(first_row) if 'Actividad' in cell.get_text() or 'Fecha' in cell.get_text()]
-            
-            for row in cronograma_table.find_all('tr'):
-                for i, cell in enumerate(row.find_all('td')):
-                    if i not in cronograma_cols: cell.decompose()
-            
-            convocatoria_data['fecha_presentacion'] = get_date_val(r'Presentación')
-            convocatoria_data['fecha_adjudicacion'] = get_date_val(r'Adjudicación')
-            convocatoria_data['fecha_formalizacion'] = get_date_val(r'Formalización')
-            convocatoria_data['fecha_entrega'] = get_date_val(r'Entrega')
+          item = {}
 
-        # ==========================================
-        # 4. ITEMS Y TOTALES
-        # ==========================================
-        items_table = soup.find("td", string=re.compile(r'Código del? Catálogo'))
-        
-        if items_table:
-            items_table = items_table.find_parent("tr").find_parent("table")
-            total_raw = items_table.find_all("td")[-1].get_text()
-            convocatoria_data['total'] = parse_float(total_raw)
+          for i in range(len(cols)):
+            if i < len(headers):
+              key = headers[i]
+              # Mantenemos HTML en descripción
+              if key == 'descripcion':
+                item[key] = cols[i].decode_contents().strip()
+              else:
+                item[key] = clean_text(cols[i].get_text().strip())
+          items_data.append(item)
 
-            items_cols_size = len(soup.find("td", string=re.compile(r'Código del? Catálogo')).find_parent("tr").find_all('td'))
-            [table.decompose() for table in items_table.find_all('table')]
-            [row.decompose() for row in items_table.find_all("tr") if len(row.find_all('td')) != items_cols_size]
-            
-            rows = items_table.find_all("tr")
-            if len(rows) > 0:
-                headers = [h.get_text(strip=True) for h in rows[0].find_all("td")]
-                map_headers = {
-                    "Código del Catálogo": "cod_catalogo",
-                    "Descripción del bien o servicio": "descripcion",
-                    "Unidad de Medida": "medida",
-                    "Cantidad": "cantidad_solicitada",
-                    "Precio referencial unitario": "precio_referencial",
-                    "Precio referencial total": "precio_referencial_total"
-                }
-                headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
+    total = 0.0
+    for item in items_data:
+      total += parse_float(item.get('precio_referencial_total')) or 0.0
+    convocatoria_data['total_referencial'] = total
 
-                for row in rows[1:]:
-                    cols = row.find_all("td")
-                    if not cols or len(cols) < 2: continue
-                    
-                    item = {}
+    # ==========================================
+    # 4. GUARDADO CON SLUGS
+    # ==========================================
+    insert_convocatoria(
+      db,
+      cuce=convocatoria_data.get('cuce'),
 
-                    for i in range(len(cols)):
-                        if i < len(headers):
-                            key = headers[i]
-                            # Mantenemos HTML en descripción
-                            if key == 'descripcion':
-                                item[key] = cols[i].decode_contents().strip()
-                            elif key in ['cantidad_solicitada', 'precio_referencial', 'precio_referencial_total']:
-                                item[key] = parse_float(cols[i].get_text().strip())
-                            else:
-                                item[key] = clean_text(cols[i].get_text().strip())
-                    items_data.append(item)
+      entidad_cod=entidad_data.get('cod'),
+      entidad_nombre=entidad_data.get('nombre'),
+      entidad_departamento=entidad_data.get('departamento'),
 
-        # ==========================================
-        # 5. GUARDADO CON SLUGS
-        # ==========================================
-        
-        insert_convocatoria(
-            db,
-            cuce=convocatoria_data.get('cuce'),
-            cod_entidad=entidad_data.get('cod'),
-            entidad_nombre=entidad_data.get('nombre'),
-            entidad_departamento=entidad_data.get('departamento'), 
-            fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
-            objeto=convocatoria_data.get('objeto'),
-            modalidad=convocatoria_data.get('modalidad'),
-            subasta=convocatoria_data.get('subasta'),
-            concesion=convocatoria_data.get('concesion'),
-            tipo_convocatoria=convocatoria_data.get('tipo_convocatoria'),
-            forma_adjudicacion=convocatoria_data.get('forma_adjudicacion'),
-            normativa=convocatoria_data.get('normativa'),
-            tipo_contratacion=convocatoria_data.get('tipo_contratacion'),
-            metodo_seleccion=convocatoria_data.get('metodo_seleccion'),
-            garantias=convocatoria_data.get('garantias'),
-            moneda=convocatoria_data.get('moneda'),
-            elaboracion_dbc=convocatoria_data.get('elaboracion_dbc'),
-            recurrente_sgte_gestion=convocatoria_data.get('recurrente_sgte_gestion'),
-            total=convocatoria_data.get('total'),
-            fecha_presentacion=convocatoria_data.get('fecha_presentacion'),
-            fecha_adjudicacion=convocatoria_data.get('fecha_adjudicacion'),
-            fecha_formalizacion=convocatoria_data.get('fecha_formalizacion'),
-            fecha_entrega=convocatoria_data.get('fecha_entrega'),
-            estado="Publicado", 
-            forms="FORM100" 
-        )
+      objeto=convocatoria_data.get('objeto'),
+      modalidad=convocatoria_data.get('modalidad'),
+      subasta=convocatoria_data.get('subasta') or "No",
+      concesion=convocatoria_data.get('concesion'),
+      tipo_convocatoria=convocatoria_data.get('tipo_convocatoria'),
+      forma_adjudicacion=convocatoria_data.get('forma_adjudicacion'),
+      normativa=convocatoria_data.get('normativa'),
+      tipo_contratacion=convocatoria_data.get('tipo_contratacion'),
+      metodo_seleccion=convocatoria_data.get('metodo_seleccion'),
+      garantias=convocatoria_data.get('garantias'),
+      moneda=convocatoria_data.get('moneda'),
+      elaboracion_dbc=convocatoria_data.get('elaboracion_dbc'),
+      recurrente_sgte_gestion=convocatoria_data.get('recurrente_sgte_gestion'),
+      total_referencial=convocatoria_data.get('total_referencial'),
 
-        # Set para controlar duplicados dentro del mismo form
-        used_slugs = set()
+      fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
+      fecha_presentacion=convocatoria_data.get('fecha_presentacion'),
+      fecha_adjudicacion=convocatoria_data.get('fecha_adjudicacion'),
+      fecha_formalizacion=convocatoria_data.get('fecha_formalizacion'),
+      fecha_entrega=convocatoria_data.get('fecha_entrega'),
 
-        for i, item in enumerate(items_data):
-            item['entidad_cod'] = entidad_data.get('cod')
-            item['entidad_nombre'] = entidad_data.get('nombre')
-            item['entidad_departamento'] = entidad_data.get('departamento')
-            item['modalidad'] = convocatoria_data.get('modalidad')
-            item['estado'] = "Publicado"
-            item['tipo_convocatoria'] = convocatoria_data.get('tipo_convocatoria')
+      estado="Publicado", 
+      forms=file_name.split("FORM")[-1].replace(".html", "")
+    )
 
-            # 1. Generar Slug Base
-            raw_desc = item.get('descripcion', f'item_{i}')
-            slug_base = generate_slug(raw_desc)
-            
-            # 2. Manejo de duplicados (Ej: dos items "Papel Bond")
-            slug_final = slug_base
-            counter = 1
-            while slug_final in used_slugs:
-                slug_final = f"{slug_base}_{counter}"
-                counter += 1
-            
-            used_slugs.add(slug_final)
-            insert_item(db, item, convocatoria_cuce, slug_final)
+    # Set para controlar duplicados dentro del mismo form
+    used_slugs = set()
 
-        print(f"✅ Formulario 100 procesado: {convocatoria_data.get('cuce')}")
+    for i, item in enumerate(items_data):
+      raw_desc = item.get('descripcion', f'item_{i}')
+      slug_base = generate_slug(raw_desc)
+      slug_final = slug_base
+      counter = 1
+      while slug_final in used_slugs:
+        slug_final = f"{slug_base}_{counter}"
+        counter += 1
+      
+      used_slugs.add(slug_final)
+      
+      insert_item(
+        db,
+        cuce=convocatoria_data.get('cuce'),
+        item_identifier=slug_final,
 
-    except Exception as e:
-        print(f"❌ Error fatal procesando {file_name}: {e}")
+        descripcion=item.get('descripcion'),
+        catalogo_cod=item.get('catalogo_cod'),
+        medida=item.get('medida'),
+        cantidad_solicitada=item.get('cantidad_solicitada') or 1.0,
+        precio_referencial=item.get('precio_referencial') or 0.0,
+        precio_referencial_total=item.get('precio_referencial_total') or 0.0,
+
+        estado="Publicado",
+        modalidad=convocatoria_data.get('modalidad'),
+        tipo_convocatoria=convocatoria_data.get('tipo_convocatoria'),
+        tipo_contratacion=convocatoria_data.get('tipo_contratacion'),
+        fecha_publicacion=convocatoria_data.get('fecha_publicacion'),
+        fecha_presentacion=convocatoria_data.get('fecha_presentacion'),
+
+        entidad_cod=entidad_data.get('cod'),
+        entidad_nombre=entidad_data.get('nombre'),
+        entidad_departamento=entidad_data.get('departamento')
+      )
+
+    print(f"✅ Formulario 100 procesado: {convocatoria_data.get('cuce')}")
+
+  except Exception as e:
+    print(f"❌ Error fatal procesando {file_name}: {e}")

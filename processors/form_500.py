@@ -1,17 +1,19 @@
 from bs4 import BeautifulSoup
 import re
-import unicodedata
-from datetime import datetime
-from shared.utils import clean_text, parse_float, parse_date, generate_slug
-from shared.firestore import update_convocatoria_status, get_items_by_cuce, update_item_adjudicacion, insert_proponente, insert_item
-
-# --- Función para limpiar texto para comparación (Matching) ---
-def normalize_for_match(text):
-    if not text: return ""
-    # Quitar HTML, acentos, mayúsculas y espacios extra
-    text = BeautifulSoup(text, "html.parser").get_text(separator=" ")
-    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
-    return re.sub(r'\s+', ' ', text).strip().lower()
+from shared.utils import (
+  clean_text,
+  parse_float,
+  parse_date,
+  generate_slug,
+  normalize_for_match
+)
+from shared.firestore import (
+    update_convocatoria_status,
+    get_items_by_cuce,
+    update_item_adjudicacion,
+    insert_proponente,
+    insert_item
+)
 
 def process_500(html_content, file_name, db):
     print(f"--- Procesando Formulario 500: {file_name} ---")

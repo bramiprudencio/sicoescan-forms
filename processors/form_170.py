@@ -3,7 +3,7 @@ import re
 import unicodedata
 from shared.utils import clean_text, parse_float, generate_slug
 # Asegúrate de tener insert_proponente o crea la lógica simple abajo
-from shared.firestore import insert_entidad, insert_convocatoria, insert_item, insert_proponente 
+from shared.firestore import insert_convocatoria, insert_item, insert_proponente 
 
 def process_170(html_content, file_name, db):
     print(f"--- Procesando Formulario 170: {file_name} ---")
