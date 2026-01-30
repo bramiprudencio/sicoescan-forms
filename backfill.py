@@ -1,25 +1,63 @@
 import requests
 from google.cloud import firestore
+import concurrent.futures # <--- LA CLAVE PARA LA VELOCIDAD
+from tqdm import tqdm # Barra de progreso
 import sys
 
 # Importamos TUS módulos procesadores
 from processors import form_100, form_110, form_170, form_400, form_500
 
 # Configuración
-ARCHIVO_LISTA = "100_faltantes.txt" # El archivo con la lista de nombres
-BASE_URL = "https://storage.googleapis.com/sicoescan/forms/" # URL base de tu bucket
+ARCHIVO_LISTA = "110.txt"
+BASE_URL = "https://storage.googleapis.com/sicoescan/forms/"
+NUM_HILOS = 20
 
-# Inicializar Firestore (usará tus credenciales locales o el json)
+# Inicializar Firestore (Firestore Client es thread-safe, podemos usar una instancia global)
 try:
   db = firestore.Client()
 except Exception:
-  # Si usas un archivo json explícito:
   from google.oauth2 import service_account
   cred = service_account.Credentials.from_service_account_file('./firebase-credentials.json')
   db = firestore.Client(credentials=cred)
 
-def run_backfill():
-  print(f"🚀 Iniciando procesamiento desde lista: {ARCHIVO_LISTA}")
+def procesar_un_archivo(linea_cruda):
+  file_name = linea_cruda.strip()
+  if not file_name: return "VACIO"
+
+  url = f"{BASE_URL}{file_name}"
+
+  try:
+    response = requests.get(url, timeout=10)
+    
+    if response.status_code != 200:
+      return f"ERROR_DOWNLOAD_{response.status_code}"
+      
+    response.encoding = "utf-8"
+    html_content = response.text
+    name_upper = file_name.upper()
+
+    if "FORM100" in name_upper:
+      form_100.process_100(html_content, file_name, db)
+    elif "FORM110" in name_upper:
+      form_110.process_110(html_content, file_name, db)
+    elif "FORM170" in name_upper:
+      form_170.process_170(html_content, file_name, db)
+    elif "FORM400" in name_upper:
+      form_400.process_400(html_content, file_name, db)
+    elif "FORM500" in name_upper:
+      form_500.process_500(html_content, file_name, db)
+    else:
+      return "SKIP_UNKNOWN"
+
+    return "OK"
+
+  except Exception as e:
+    with open("backfill_errors.txt", "a") as f:
+      f.write(f"{file_name} - {str(e)}\n")
+    return f"ERROR_EXCEPTION"
+
+def run_backfill_rapido():
+  print(f"🚀 Iniciando procesamiento PARALELO con {NUM_HILOS} hilos.")
   
   try:
     with open(ARCHIVO_LISTA, "r", encoding="utf-8") as f:
@@ -28,62 +66,18 @@ def run_backfill():
     print(f"❌ No se encontró el archivo {ARCHIVO_LISTA}")
     return
 
-  contador = 0
-  errores = 0
+  files_to_process = [line for line in lines if line.strip()]
+  total_files = len(files_to_process)
+  
+  with concurrent.futures.ThreadPoolExecutor(max_workers=NUM_HILOS) as executor:
+    results = list(tqdm(executor.map(procesar_un_archivo, files_to_process), total=total_files, unit="form"))
 
-  for line in lines:
-    file_name = line.strip()
-    if not file_name: continue # Saltar líneas vacías
-    
-    url = f"{BASE_URL}{file_name}"
-
-
-    print(f"📄 [{contador + 1}] Procesando: {file_name}")
-
-    try:
-      # --- 1. TU MÉTODO ORIGINAL (Requests) ---
-      response = requests.get(url)
-      
-      if response.status_code != 200:
-        print(f"⚠️ Error descargando {url}: Status {response.status_code}")
-        errores += 1
-        continue
-        
-      response.encoding = "utf-8"
-      html_content = response.text
-      
-      # --- 2. ENRUTADOR MODULAR ---
-      name_upper = file_name.upper()
-
-      if "FORM100" in name_upper:
-        form_100.process_100(html_content, file_name, db)
-      
-      elif "FORM110" in name_upper:
-        form_110.process_110(html_content, file_name, db)
-
-      elif "FORM170" in name_upper:
-        form_170.process_170(html_content, file_name, db)
-      
-      elif "FORM400" in name_upper:
-        form_400.process_400(html_content, file_name, db)
-
-      elif "FORM500" in name_upper:
-        form_500.process_500(html_content, file_name, db)
-      
-      else:
-        print(f"⏩ Salta: Formulario no reconocido")
-
-    except Exception as e:
-      print(f"❌ ERROR procesando {file_name}: {e}")
-      errores += 1
-      with open("backfill_errors.txt", "a") as err_file:
-        err_file.write(f"{file_name}\n")
-
-    contador += 1
-
+  ok_count = results.count("OK")
+  errores = total_files - ok_count
+  
   print(f"\n✅ Proceso completado.")
-  print(f"Total procesados: {contador}")
-  print(f"Total errores: {errores}")
+  print(f"Total procesados con éxito: {ok_count}")
+  print(f"Total fallos/skips: {errores}")
 
 if __name__ == "__main__":
-  run_backfill()
+  run_backfill_rapido()

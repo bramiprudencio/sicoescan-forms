@@ -12,6 +12,7 @@ from shared.firestore import (
     insert_entidad,
     insert_item
 )
+
 def process_100(html_content, file_name, db):
   print(f"--- Procesando Formulario 100: {file_name} ---")
   
@@ -92,7 +93,7 @@ def process_100(html_content, file_name, db):
       if label_td:
         value_td = label_td.find_next_sibling('td', class_=re.compile(r'FormularioDato'))
         if value_td:
-          convocatoria_data[key] = clean_text(value_td.get_text())
+          convocatoria_data[key] = clean_text(value_td.get_text(separator=" ", strip=True))
 
     # Modalidad
     convocatoria_data['modalidad'] = extract_modalidad(soup)

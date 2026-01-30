@@ -42,20 +42,20 @@ def process_110(html_content, file_name, db):
         "departamento": None 
       }
 
-    if entidad_data.get("cod"):
-      entidad_ref = db.collection("entidades").document(entidad_data["cod"])
-      entidad_snapshot = entidad_ref.get()
+      if entidad_data.get("cod"):
+        entidad_ref = db.collection("entidades").document(entidad_data["cod"])
+        entidad_snapshot = entidad_ref.get()
 
-    if entidad_snapshot.exists:
-      entidad_data["departamento"] = entidad_snapshot.to_dict().get("departamento")
-    else:
-      insert_entidad(
-      db, 
-      entidad_data["cod"], 
-      entidad_data["nombre"], 
-      fax=entidad_data["fax"], 
-      telefono=entidad_data["telefono"]
-      )
+      if entidad_snapshot.exists:
+        entidad_data["departamento"] = entidad_snapshot.to_dict().get("departamento")
+      else:
+        insert_entidad(
+          db, 
+          entidad_data["cod"], 
+          entidad_data["nombre"], 
+          fax=entidad_data["fax"], 
+          telefono=entidad_data["telefono"]
+        )
 
   except Exception as e:
     print(f"Error extrayendo entidad en {file_name}: {e}")
@@ -93,7 +93,7 @@ def process_110(html_content, file_name, db):
       if label_td:
         value_td = label_td.find_next_sibling('td', class_=re.compile(r'FormularioDato'))
         if value_td:
-          convocatoria_data[key] = clean_text(value_td.get_text())
+          convocatoria_data[key] = clean_text(value_td.get_text(separator=" ", strip=True))
 
     # Modalidad
     convocatoria_data['modalidad'] = extract_modalidad(soup)
@@ -113,8 +113,8 @@ def process_110(html_content, file_name, db):
       items_cols_size = len(soup.find("td", string=re.compile(r'Código del? Catálogo')).find_parent("tr").find_all('td'))
       [table.decompose() for table in items_table.find_all('table')]
       [row.decompose() for row in items_table.find_all("tr") if len(row.find_all('td')) != items_cols_size]
-      rows = items_table.find_all("tr")
       
+      rows = items_table.find_all("tr")
       if len(rows) > 1:
         headers = [h.get_text(strip=True) for h in rows[0].find_all("td")]
         
@@ -130,7 +130,6 @@ def process_110(html_content, file_name, db):
         }
         headers = [map_headers.get(h, h.lower().replace(" ", "_")) for h in headers]
 
-        # Iteramos desde la 2da hasta la penúltima (donde suele estar el total)
         for row in rows[1:]:
           cols = row.find_all("td", recursive=False)
           
@@ -156,13 +155,7 @@ def process_110(html_content, file_name, db):
     # ==========================================
     # 4. GUARDADO FINAL (CON CAMPOS EXTRA Y SLUGS)
     # ==========================================
-
-    print(convocatoria_data)
-    print('-------------------')
-    print(entidad_data)
-    print('-------------------')
-    print(items_data)
-    
+       
     insert_convocatoria(
       db,
       cuce=convocatoria_data.get('cuce'),
