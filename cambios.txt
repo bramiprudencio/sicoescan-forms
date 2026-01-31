@@ -15,4 +15,33 @@ proponente:
 
   NIT
     nombre
-    nacionalidad
+    origen
+
+110:
+  adjudicacion: presentacion
+400:
+  Fecha de firma de contrato (día/mes/año): presentacion, adjudicacion y formalizacion
+  Fecha de recepción:  entrega
+  Datos de la publicación del archivo: publicacion
+
+items:
+  fechas:
+    publicacion
+    presentacion
+    adjudicacion
+    formalizacion
+    entrega
+
+170-220:
+  convocatoria:
+    estado -> Adjudicado
+
+  items:
+    ADJUDICADOS
+      estado -> Adjudicado
+      cantidad_adjudicada
+      precio_adjudicado
+      precio_adjudicado_total
+    DESIERTOS
+      estado -> Desierto
+      causal_desierto

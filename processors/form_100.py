@@ -129,7 +129,6 @@ def process_100(html_content, file_name, db):
 
         for row in rows[1:]:
           cols = row.find_all("td")
-
           if not cols or len(cols) < 2 or cols[0].get_text().startswith("#"): continue
 
           item = {}

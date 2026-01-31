@@ -5,10 +5,16 @@ from tqdm import tqdm # Barra de progreso
 import sys
 
 # Importamos TUS módulos procesadores
-from processors import form_100, form_110, form_170, form_400, form_500
+from processors import (
+  form_100,
+  form_110,
+  form_170,
+  form_400,
+  form_500
+)
 
 # Configuración
-ARCHIVO_LISTA = "110.txt"
+ARCHIVO_LISTA = "guias/400_1.txt"
 BASE_URL = "https://storage.googleapis.com/sicoescan/forms/"
 NUM_HILOS = 20
 
@@ -52,7 +58,7 @@ def procesar_un_archivo(linea_cruda):
     return "OK"
 
   except Exception as e:
-    with open("backfill_errors.txt", "a") as f:
+    with open("guias/backfill_errors.txt", "a") as f:
       f.write(f"{file_name} - {str(e)}\n")
     return f"ERROR_EXCEPTION"
 
